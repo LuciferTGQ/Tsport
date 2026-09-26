@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+test-results/
+playwright-report/
+android/local.properties
+*.apk
+*.aab
+!releases/Tsport-1.0.0-debug.apk
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Tsport 训练日记</string>
+    <string name="title_activity_main">Tsport 训练日记</string>
+    <string name="package_name">com.tsport.fitness</string>
+    <string name="custom_url_scheme">com.tsport.fitness</string>
+</resources>

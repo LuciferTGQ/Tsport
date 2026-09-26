@@ -1,0 +1,1 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android"><item android:drawable="@color/tsport_green"/><item android:width="108dp" android:height="108dp" android:gravity="center" android:drawable="@drawable/tsport_foreground"/></layer-list>

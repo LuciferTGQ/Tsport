@@ -892,8 +892,23 @@ footer > span:last-child {
 }
 .timer-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+.complete-exercise {
+  width: 100%;
+  margin-top: 12px;
+  min-height: 44px;
+  background: #deede7;
+  color: #174d3e;
+  font-weight: 600;
+}
+.timer-reminder-settings {
+  font-size: 12px;
+  color: #d4ee98;
+  text-decoration: underline;
+  min-height: 32px;
 }
 .lime-button {
   background: #d4ee98;

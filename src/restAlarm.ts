@@ -1,12 +1,12 @@
 import type { Data } from "./model.ts";
 
-export type AlarmResult = "scheduled" | "inexact" | "off" | "ready" | "denied";
+export type AlarmResult = "scheduled" | "needsExact" | "off" | "ready" | "denied";
 export type AlarmPort = {
   cancel: () => Promise<void>;
   clearDelivered: () => Promise<void>;
   permission: () => Promise<{ display: boolean; exact: boolean }>;
   prepare: (settings: Data["settings"]) => Promise<string>;
-  schedule: (data: Data, channel: string, exact: boolean) => Promise<void>;
+  schedule: (data: Data, channel: string) => Promise<void>;
 };
 
 /** Latest change wins, including while an earlier native plugin call is pending. */
@@ -37,12 +37,16 @@ export function createRestAlarmScheduler(port: AlarmPort, now = Date.now) {
           await port.cancel();
           return "denied";
         }
+        if (!status.exact) {
+          await port.cancel();
+          return "needsExact";
+        }
         const channel = await port.prepare(data.settings);
         if (current !== revision) return "off";
         await port.cancel();
         if (current !== revision || timer.deadline <= now()) return "ready";
-        await port.schedule(data, channel, status.exact);
-        return status.exact ? "scheduled" : "inexact";
+        await port.schedule(data, channel);
+        return "scheduled";
       });
     queue = operation;
     return operation;

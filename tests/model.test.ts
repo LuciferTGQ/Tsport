@@ -10,7 +10,41 @@ import {
   validateData,
   dateKey,
   parseDate,
+  migrateData,
+  completeExercise,
 } from "../src/model.ts";
+
+test("旧记录补上休息标签且迁移幂等，休息日不算运动日", () => {
+  const old = initialData();
+  old.tags = old.tags.filter((t) => t.id !== "rest");
+  old.days["2026-09-26"] = samplePlan(120);
+  const updated = migrateData(old);
+  assert.equal(updated.tags.filter((t) => t.name === "休息").length, 1);
+  assert.equal(migrateData(updated), updated);
+  assert.equal(updated.days, old.days);
+  assert.equal(completedSets({ tags: ["rest"], exercises: [], note: "" }), 0);
+  assert.ok(validateData(updated));
+});
+
+test("达标后主动完成动作，取消本动作休息并保留历史；模板不带完成状态", () => {
+  const d = initialData(), date = "2026-09-26";
+  d.days[date] = samplePlan(120);
+  const e = d.days[date].exercises[0];
+  e.sets = 1;
+  assert.equal(completeExercise(d, date, e.id), d);
+  d.timer = { phase: "work", date, exerciseId: e.id, started: 0, deadline: 0 };
+  const ended = finishSet(d, 40000);
+  const completed = completeExercise(ended, date, e.id);
+  assert.equal(completed.timer, null);
+  assert.equal(completed.days[date].exercises[0].completed, true);
+  assert.deepEqual(completed.days[date].exercises[0].records, ended.days[date].exercises[0].records);
+  assert.equal(clonePlan(completed.days[date]).exercises[0].completed, false);
+  assert.ok(validateData(JSON.parse(JSON.stringify(completed))));
+  const working = { ...completed, timer: d.timer };
+  assert.equal(completeExercise(working, date, e.id), working);
+  const another = { ...ended, timer: { ...ended.timer!, exerciseId: d.days[date].exercises[1].id } };
+  assert.equal(completeExercise(another, date, e.id).timer, another.timer);
+});
 
 test("结束一组保留实际耗时，自动进入休息，重复结束不会产生重复记录", () => {
   const d = initialData();

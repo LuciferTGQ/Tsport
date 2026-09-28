@@ -7,6 +7,7 @@ android/local.properties
 *.apk
 *.aab
 !releases/Tsport-1.0.0-debug.apk
+!releases/Tsport-1.0.1-debug.apk
 .env
 .env.*
 !.env.example

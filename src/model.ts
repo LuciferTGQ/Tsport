@@ -14,6 +14,7 @@ export type Exercise = {
   seconds: number;
   rest: number;
   records: SetRecord[];
+  completed?: boolean;
 };
 export type Day = { tags: string[]; exercises: Exercise[]; note: string };
 export type Timer = {
@@ -62,11 +63,42 @@ export const initialData = (): Data => ({
     { id: "shoulder", name: "肩", color: "#f5eacb" },
     { id: "back", name: "背", color: "#e0e8f7" },
     { id: "leg", name: "腿", color: "#eee0f3" },
+    { id: "rest", name: "休息", color: "#e8e9ed" },
   ],
   templates: [],
   settings: { rest: 120, sound: true, notifications: false, vibration: true },
   timer: null,
 });
+/** Add the built-in rest label to older installations without altering their days. */
+export function migrateData(data: Data): Data {
+  if (data.tags.some((tag) => tag.name === "休息")) return data;
+  return {
+    ...data,
+    tags: [...data.tags, {
+      id: data.tags.some((tag) => tag.id === "rest") ? uid() : "rest",
+      name: "休息",
+      color: "#e8e9ed",
+    }],
+  };
+}
+export function completeExercise(data: Data, date: string, id: string): Data {
+  const day = data.days[date];
+  const exercise = day?.exercises.find((e) => e.id === id);
+  if (!exercise || exercise.records.length < exercise.sets || data.timer?.phase === "work")
+    return data;
+  return {
+    ...data,
+    days: {
+      ...data.days,
+      [date]: {
+        ...day,
+        exercises: day.exercises.map((e) =>
+          e.id === id ? { ...e, completed: true } : e),
+      },
+    },
+    timer: data.timer?.date === date && data.timer.exerciseId === id ? null : data.timer,
+  };
+}
 export function samplePlan(rest: number): Day {
   return {
     tags: ["chest"],
@@ -82,7 +114,9 @@ export function clonePlan(day: Day): Day {
   return {
     tags: [...day.tags],
     note: day.note,
-    exercises: day.exercises.map((e) => ({ ...e, id: uid(), records: [] })),
+    exercises: day.exercises.map((e) => ({
+      ...e, id: uid(), records: [], completed: false,
+    })),
   };
 }
 export function finishSet(data: Data, now: number): Data {
@@ -154,6 +188,7 @@ export function validateData(value: unknown): value is Data {
         num(e.kg, 0, 1000) &&
         num(e.seconds, 1, 3600) &&
         num(e.rest, 0, 3600) &&
+        (e.completed === undefined || typeof e.completed === "boolean") &&
         Array.isArray(e.records) &&
         e.records.every(
           (r) =>

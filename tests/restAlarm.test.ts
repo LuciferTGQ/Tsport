@@ -73,14 +73,14 @@ test("异步安排期间跳过或关闭，不留下过期闹钟", async () => {
   await Promise.all([first, cancel]);
   assert.deepEqual(events, ["cancel", "clear"]);
 });
-test("权限不足不伪报准时：允许通知但无精确权限返回延迟状态，拒绝通知则取消", async () => {
+test("权限不足不降级为延迟通知：缺少精确权限或通知权限都取消安排", async () => {
   const { port, events } = fixture();
   port.permission = async () => ({ display: true, exact: false });
   const sync = createRestAlarmScheduler(port, () => 1000);
-  assert.equal(await sync(rest()), "inexact");
+  assert.equal(await sync(rest()), "needsExact");
   port.permission = async () => ({ display: false, exact: false });
   assert.equal(await sync(rest()), "denied");
-  assert.deepEqual(events, ["cancel", "schedule:120000", "cancel"]);
+  assert.deepEqual(events, ["cancel", "cancel"]);
 });
 test("安排失败后仍可处理后续取消，不会卡死队列", async () => {
   const { port, events } = fixture();

@@ -39,11 +39,13 @@ import {
 import {
   clonePlan,
   completedSets,
+  completeExercise,
   dateKey,
   emptyDay,
   finishSet,
   formatTime,
   initialData,
+  migrateData,
   newExercise,
   parseDate,
   samplePlan,
@@ -63,7 +65,7 @@ function readData() {
     const s = localStorage.getItem(KEY);
     if (!s) return initialData();
     const d: unknown = JSON.parse(s);
-    if (validateData(d)) return d;
+    if (validateData(d)) return migrateData(d);
     bootError = "已有数据无法读取。原始数据已保留，请先导出原始备份再恢复。";
   } catch {
     bootError = "无法读取本地记录，请检查浏览器存储权限。";
@@ -210,7 +212,7 @@ export default function App() {
           setNativeAlarmStatus(
             {
               scheduled: "Android 系统提醒已安排",
-              inexact: "系统提醒已安排 · 未开启准时权限",
+              needsExact: "后台提醒未启用 · 请允许闹钟与提醒",
               off: "",
               ready: "",
               denied: "通知被禁止，请在设置中允许",
@@ -326,6 +328,14 @@ export default function App() {
       if (d.timer?.phase === "work") return d;
       return {
         ...d,
+        days: {
+          ...d.days,
+          [date]: {
+            ...d.days[date],
+            exercises: d.days[date].exercises.map((e) =>
+              e.id === id ? { ...e, completed: false } : e),
+          },
+        },
         timer: {
           phase: "work",
           date,
@@ -335,6 +345,11 @@ export default function App() {
         },
       };
     });
+  };
+  const complete = (id: string, date = selected) => {
+    setData((d) => completeExercise(d, date, id));
+    setRestAlert(null);
+    notify("该动作已完成，辛苦了！");
   };
   const quick = (e: Exercise) => {
     if (timer?.phase === "work") {
@@ -347,6 +362,7 @@ export default function App() {
         x.id === e.id
           ? {
               ...x,
+              completed: false,
               records: [
                 ...x.records,
                 {
@@ -448,7 +464,7 @@ export default function App() {
         text: "此备份将替换当前全部记录。建议先导出当前数据。恢复后未完成的计时将停止，完成记录会保留。",
         action: () => {
           saveBlocked.current = false;
-          setData({ ...d, timer: null });
+          setData({ ...migrateData(d), timer: null });
           setStorageError("");
           notify("备份已恢复");
         },
@@ -926,6 +942,7 @@ export default function App() {
                             </div>
                             <div className="exercise-bottom">
                               <span>
+                                {e.completed ? "动作已完成 · " : ""}
                                 {e.records.length} 组完成 · 休息{" "}
                                 {formatTime(e.rest)}
                               </span>
@@ -934,9 +951,19 @@ export default function App() {
                                 onClick={() => start(e.id)}
                               >
                                 <Play size={13} />
-                                {e.records.length ? "开始下一组" : "开始本组"}
+                                {e.completed ? "再加练一组" :
+                                  e.records.length ? "开始下一组" : "开始本组"}
                               </button>
                             </div>
+                            {!e.completed && e.records.length >= e.sets && (
+                              <button
+                                className="complete-exercise"
+                                disabled={timer?.phase === "work"}
+                                onClick={() => complete(e.id)}
+                              >
+                                <Check size={16} /> 完成该动作
+                              </button>
+                            )}
                             {e.records.length > 0 && (
                               <details>
                                 <summary>
@@ -1293,6 +1320,11 @@ export default function App() {
             {timer.phase === "ready" ? "就绪" : formatTime(activeSeconds)}
           </div>
           <div className="timer-controls">
+            {timer.phase !== "work" && activeExercise.records.length >= activeExercise.sets && (
+              <button className="lime-button" onClick={() => complete(activeExercise.id, timer.date)}>
+                <Check size={17} /> 完成该动作
+              </button>
+            )}
             {timer.phase === "work" ? (
               <button
                 className="lime-button"
@@ -1342,6 +1374,11 @@ export default function App() {
               </button>
             )}
           </div>
+          {isAndroid && (!data.settings.notifications || !nativeAlarmStatus.includes("已安排")) && (
+            <button className="timer-reminder-settings" onClick={() => setTab("settings")}>
+              {data.settings.notifications ? "检查提醒权限" : "开启后台提醒"}
+            </button>
+          )}
           <button
             className="timer-close"
             aria-label="关闭计时"
@@ -1410,7 +1447,9 @@ export default function App() {
                 patchDay((d) => ({
                   ...d,
                   exercises: d.exercises.some((x) => x.id === e.id)
-                    ? d.exercises.map((x) => (x.id === e.id ? e : x))
+                    ? d.exercises.map((x) => x.id === e.id
+                      ? { ...e, completed: e.completed && e.records.length >= e.sets }
+                      : x)
                     : [...d.exercises, e],
                 }));
                 setModal(null);
@@ -1657,6 +1696,7 @@ export default function App() {
                       x.id === modal.exerciseId
                         ? {
                             ...x,
+                            completed: false,
                             records: x.records.filter(
                               (r) => r.id !== modal.record.id,
                             ),

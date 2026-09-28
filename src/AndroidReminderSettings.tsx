@@ -72,8 +72,8 @@ export default function AndroidReminderSettings({
         />
       </label>
       <p className="reminder-description">
-        {status.display
-          ? "系统通知已允许。休息开始时会安排通知，切到其他应用仍可提醒。"
+        {settings.notifications && status.display && status.exact
+          ? "后台提醒已开启。休息开始时交给 Android 闹钟，切到其他应用仍可提醒。"
           : "开启后请允许 Android 通知权限。到点显示通知，点击回到对应训练。"}
       </p>
       <label className="switch-row">
@@ -93,7 +93,7 @@ export default function AndroidReminderSettings({
         <p className="reminder-description">
           {status.exact
             ? "休息截止时间由 Android 系统计时。"
-            : "请开启“闹钟与提醒”权限，否则系统可能延后通知。"}
+            : "后台准时提醒尚未启用，请允许“闹钟与提醒”。"}
         </p>
         {!status.exact && (
           <button
@@ -113,12 +113,12 @@ export default function AndroidReminderSettings({
       </div>
       <button
         className="secondary wide"
-        disabled={!status.display || busy}
+        disabled={!status.display || !status.exact || busy}
         onClick={async () => {
           setBusy(true);
           try {
             await testNativeReminder(target, settings);
-            notify("测试通知已发送，点击通知可返回训练。");
+            notify("已安排 30 秒后提醒，现在请切到其他应用或锁屏等待。");
           } catch {
             notify("通知发送失败，请检查手机通知设置。");
           } finally {
@@ -126,7 +126,7 @@ export default function AndroidReminderSettings({
           }
         }}
       >
-        <Bell size={17} /> 发送测试提醒
+        <Bell size={17} /> 30 秒后测试后台提醒
       </button>
       <p className="reminder-description">
         如未弹出横幅，请在手机的 Tsport

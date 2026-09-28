@@ -26,5 +26,9 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Android build failed.' }
 } finally { Pop-Location }
 New-Item -ItemType Directory -Path "$projectRoot/releases" -Force | Out-Null
-Copy-Item -LiteralPath "$projectRoot/android/app/build/outputs/apk/debug/app-debug.apk" -Destination "$projectRoot/releases/Tsport-1.0.0-debug.apk" -Force
-Write-Output "APK ready: $projectRoot/releases/Tsport-1.0.0-debug.apk"
+$appVersion = (Get-Content -LiteralPath "$projectRoot/package.json" -Raw | ConvertFrom-Json).version
+$apkPath = "$projectRoot/releases/Tsport-$appVersion-debug.apk"
+Copy-Item -LiteralPath "$projectRoot/android/app/build/outputs/apk/debug/app-debug.apk" -Destination $apkPath -Force
+$apkHash = (Get-FileHash -LiteralPath $apkPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath "$apkPath.sha256" -Value "$apkHash  Tsport-$appVersion-debug.apk" -Encoding ascii
+Write-Output "APK ready: $apkPath"

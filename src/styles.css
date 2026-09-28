@@ -896,6 +896,18 @@ footer > span:last-child {
   align-items: center;
   gap: 10px;
 }
+.native-diagnostics {
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 10px;
+  background: #f3f7f4;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.native-diagnostics pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .complete-exercise {
   width: 100%;
   margin-top: 12px;

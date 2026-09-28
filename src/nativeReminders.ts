@@ -12,13 +12,17 @@ const RestAlarm = registerPlugin<{
   schedule(options: {
     id: number;
     deadline: number;
-    channelId: string;
+    sound: boolean;
+    vibration: boolean;
+    name: string;
     title: string;
     body: string;
     date: string;
     exerciseId: string;
-  }): Promise<void>;
+  }): Promise<{ status: "scheduled" | "foreground" }>;
   cancel(options: { id: number }): Promise<void>;
+  status(): Promise<NativeDiagnostics>;
+  openSettings(options: { page: "app" | "battery" | "notifications" }): Promise<void>;
   addListener(event: "alarmOpened", listener: (target: ReminderTarget) => void): Promise<PluginListenerHandle>;
 }>("RestAlarm");
 export type NativeStatus = { display: boolean; exact: boolean };
@@ -40,63 +44,38 @@ export async function openExactAlarmSettings() {
   await LocalNotifications.changeExactNotificationSetting();
 }
 
-async function channel(settings: Data["settings"]) {
-  const vibration = settings.vibration !== false;
-  const id = `tsport-rest-${settings.sound ? "sound" : "quiet"}-${vibration ? "vibrate" : "still"}-v1`;
-  // A bundled silent WAV keeps the notification high-priority while respecting the sound switch.
-  await LocalNotifications.createChannel({
-    id,
-    name: `组间休息${settings.sound ? "有声" : "静音"}${vibration ? "震动" : ""}`,
-    description: "训练组间休息结束提醒",
-    importance: 4,
-    visibility: 1,
-    vibration,
-    sound: settings.sound ? "rest_beep.wav" : "silence.wav",
-  });
-  return id;
-}
+export type NativeDiagnostics = {
+  version: string; device: string; serviceRunning: boolean; activeTimers: number;
+  display: boolean; exact: boolean; batteryUnrestricted: boolean; events: string;
+};
+export const readNativeDiagnostics = () => RestAlarm.status();
+export const openNativeSettings = (page: "app" | "battery" | "notifications") => RestAlarm.openSettings({ page });
+export const cancelNativeTest = () => RestAlarm.cancel({ id: TEST_ID });
 
 export const syncNativeReminder = createRestAlarmScheduler({
-  cancel: async () => {
-    await RestAlarm.cancel({ id: REST_ID });
-    // Remove timers created by 1.0.0 as well when upgrading in place.
-    await LocalNotifications.cancel({ notifications: [{ id: REST_ID }] });
-  },
-  clearDelivered: () =>
-    LocalNotifications.removeDeliveredNotificationsById({ ids: [REST_ID] }),
-  permission: nativeReminderStatus,
-  prepare: channel,
-  schedule: async (data, channelId) => {
+  cancel: () => RestAlarm.cancel({ id: REST_ID }),
+  schedule: async (data) => {
     const timer = data.timer!;
-    const exercise = data.days[timer.date]?.exercises.find(
-      (e) => e.id === timer.exerciseId,
-    );
-    await RestAlarm.schedule({
-      id: REST_ID,
-      deadline: timer.deadline,
-      channelId,
-      title: "休息结束 · Tsport",
-      body: `${exercise?.name ?? "本组训练"} · 点击返回，准备好后再开始下一组。`,
-      date: timer.date,
-      exerciseId: timer.exerciseId,
+    const exercise = data.days[timer.date]?.exercises.find((e) => e.id === timer.exerciseId);
+    const result = await RestAlarm.schedule({
+      id: REST_ID, deadline: timer.deadline,
+      sound: data.settings.sound, vibration: data.settings.vibration !== false,
+      title: timer.kind === "exercise" ? "动作间休息结束 · Tsport" : "休息结束 · Tsport",
+      body: `${exercise?.name ?? "本组训练"} · 点击返回，准备好后再开始。`,
+      name: exercise?.name ?? "训练休息",
+      date: timer.date, exerciseId: timer.exerciseId,
     });
+    return result.status;
   },
 });
 
-export async function testNativeReminder(
-  target: ReminderTarget,
-  settings: Data["settings"],
-) {
-  const status = await nativeReminderStatus();
-  if (!status.display) throw new Error("请先允许通知权限");
-  if (!status.exact) throw new Error("请先允许“闹钟与提醒”权限");
+export async function testNativeReminder(target: ReminderTarget, settings: Data["settings"]) {
+  // Dispatch immediately; backgrounding during a JS permission/channel await must not lose the timer.
   await RestAlarm.schedule({
-    id: TEST_ID,
-    deadline: Date.now() + 30000,
-    title: "Tsport · 后台测试提醒",
-    body: "后台提醒已触发，点击返回训练。",
-    channelId: await channel(settings),
-    ...target,
+    id: TEST_ID, deadline: Date.now() + 30000,
+    title: "Tsport · 后台测试提醒", body: "原生后台计时已到点，点击返回训练。",
+    name: "30 秒后台测试 · 可切换应用或锁屏",
+    sound: settings.sound, vibration: settings.vibration !== false, ...target,
   });
 }
 

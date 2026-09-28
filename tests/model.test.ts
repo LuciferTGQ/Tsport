@@ -12,7 +12,44 @@ import {
   parseDate,
   migrateData,
   completeExercise,
+  advanceExercise,
 } from "../src/model.ts";
+
+test("绿色卡片完成动作后进入下一动作休息，下一组只写入下一动作", () => {
+  let data = initialData();
+  const date = "2026-09-28";
+  data.days[date] = samplePlan(20);
+  data.settings.exerciseRest = 90;
+  const [first, second] = data.days[date].exercises;
+  first.sets = 1;
+  data.timer = { phase: "work", date, exerciseId: first.id, started: 1000, deadline: 0 };
+  data = advanceExercise(finishSet(data, 41000), 42000);
+  assert.equal(data.days[date].exercises[0].completed, true);
+  assert.deepEqual(data.timer, { phase: "rest", kind: "exercise", date, exerciseId: second.id, started: 42000, deadline: 132000 });
+  data = settleTimer(data, 132000);
+  assert.equal(data.timer?.phase, "ready");
+  data = finishSet({ ...data, timer: { ...data.timer!, phase: "work", started: 150000 } }, 190000);
+  assert.equal(data.days[date].exercises[0].records.length, 1);
+  assert.equal(data.days[date].exercises[1].records.length, 1);
+  assert.equal(data.days[date].exercises[1].records[0].duration, 40);
+  assert.equal(data.timer?.kind, "set");
+  assert.equal(data.timer?.deadline, 210000);
+});
+
+test("最后动作完成收起计时，零秒动作间歇等待手动开始，旧备份默认两分钟", () => {
+  const d = initialData(), date = "2026-09-28";
+  d.days[date] = samplePlan(0);
+  const first = d.days[date].exercises[0];
+  first.sets = 1;
+  d.timer = { phase: "work", date, exerciseId: first.id, started: 0, deadline: 0 };
+  const ended = finishSet(d, 1000);
+  delete ended.settings.exerciseRest;
+  assert.equal(advanceExercise(ended, 1000).timer?.deadline, 121000);
+  ended.settings.exerciseRest = 0;
+  assert.equal(advanceExercise(ended, 1000).timer?.phase, "ready");
+  ended.days[date].exercises = [ended.days[date].exercises[0]];
+  assert.equal(advanceExercise(ended, 1000).timer, null);
+});
 
 test("旧记录补上休息标签且迁移幂等，休息日不算运动日", () => {
   const old = initialData();

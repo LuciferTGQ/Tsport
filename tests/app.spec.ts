@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-test("休息日标签与达标完成动作，刷新保留状态并可加练", async ({ page }) => {
+test("休息标签与绿色卡片连续切换动作，刷新后记录归属正确", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 740 });
+  await page.clock.install();
   await page.goto("/");
   await page.getByRole("button", { name: "标签", exact: true }).click();
   await page.getByRole("button", { name: "休息", exact: true }).click();
@@ -23,16 +24,21 @@ test("休息日标签与达标完成动作，刷新保留状态并可加练", as
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "artifacts/mobile-complete.png", fullPage: true });
   await dock.getByRole("button", { name: "完成该动作" }).click();
-  await expect(dock).toHaveCount(0);
+  await expect(dock).toContainText("动作间休息");
+  await expect(dock).toContainText("上斜哑铃卧推");
+  await page.screenshot({ path: "artifacts/mobile-transition.png", fullPage: true });
   await expect(card).toContainText("动作已完成");
   await page.reload();
-  await expect(card).toContainText("动作已完成");
-  await card.getByRole("button", { name: "再加练一组" }).click();
-  await expect(dock).toContainText("本组训练中");
-  await expect(card).not.toContainText("动作已完成");
+  await expect(dock).toContainText("动作间休息");
+  await page.clock.fastForward(121000);
+  await expect(dock).toContainText("准备好，再出发");
+  await dock.getByRole("button", { name: "开始下一组" }).click();
+  await expect(dock).toContainText("上斜哑铃卧推");
   await page.getByRole("button", { name: "结束本组", exact: true }).click();
-  await dock.getByRole("button", { name: "完成该动作" }).click();
-  await expect(card).toContainText("2 组完成");
+  await expect(card).toContainText("1 组完成");
+  await expect(page.locator(".exercise-card").nth(1)).toContainText("1 组完成");
+  await expect(card).toContainText("动作已完成");
+  await page.screenshot({ path: "artifacts/mobile-next-exercise.png", fullPage: true });
 });
 
 test('Android 桥接：提前安排系统提醒，修改截止时间，点击通知只返回训练',async({page})=>{
@@ -42,7 +48,7 @@ test('Android 桥接：提前安排系统提醒，修改截止时间，点击通
     const win=window as any;
     win.androidBridge={};
     win.nativeTest={calls:[],listeners:{},exact:false};
-    const promises=['checkPermissions','requestPermissions','checkExactNotificationSetting','changeExactNotificationSetting','createChannel','cancel','removeDeliveredNotificationsById','schedule','removeListener'];
+    const promises=['checkPermissions','requestPermissions','checkExactNotificationSetting','changeExactNotificationSetting','createChannel','cancel','removeDeliveredNotificationsById','schedule','removeListener','status','openSettings'];
     win.Capacitor={PluginHeaders:['LocalNotifications','App','RestAlarm'].map(name=>({name,methods:[...promises.map(method=>({name:method,rtype:'promise'})),{name:'addListener',rtype:'callback'}]})),
       nativeCallback:(plugin:string,method:string,options:any,callback:any)=>{win.nativeTest.listeners[options.eventName]=callback;return Promise.resolve(options.eventName);},
       nativePromise:async(plugin:string,method:string,options:any)=>{
@@ -50,14 +56,13 @@ test('Android 桥接：提前安排系统提醒，修改截止时间，点击通
         if(method==='checkPermissions'||method==='requestPermissions')return {display:'granted'};
         if(method==='changeExactNotificationSetting')win.nativeTest.exact=true;
         if(method==='checkExactNotificationSetting'||method==='changeExactNotificationSetting')return {exact_alarm:win.nativeTest.exact?'granted':'denied'};
+        if(plugin==='RestAlarm'&&method==='schedule')return {status:win.nativeTest.exact?'scheduled':'foreground'};
+        if(plugin==='RestAlarm'&&method==='status')return {version:'1.0.2',device:'Android 16',serviceRunning:true,activeTimers:1,display:true,exact:true,batteryUnrestricted:false,events:'foreground service started'};
         return {};
       },
     };
   });
   await page.goto('/');await page.getByRole('button',{name:'载入四动作示例'}).click();
-  await page.locator('.exercise-name').first().click();
-  await page.getByLabel('目标组数').fill('1');
-  await page.getByRole('button',{name:'保存动作'}).click();
   await page.getByRole('button',{name:'偏好设置',exact:true}).click();
   await expect(page.getByText('准时提醒：未允许')).toBeVisible();
   await page.getByLabel('休息结束系统通知').click();
@@ -67,7 +72,7 @@ test('Android 桥接：提前安排系统提醒，修改截止时间，点击通
   await page.getByRole('button',{name:'训练日历',exact:true}).click();
   await page.getByRole('button',{name:'开始本组',exact:true}).first().click();
   await page.getByRole('button',{name:'结束本组',exact:true}).click();
-  await expect(page.getByText('Android 系统提醒已安排',{exact:true})).toBeVisible();
+  await expect(page.getByText('通知栏倒计时已启动 · 系统闹钟已安排',{exact:true})).toBeVisible();
   const first=await page.evaluate(()=>{const calls=(window as any).nativeTest.calls;return calls.filter((c:any)=>c.method==='schedule').at(-1).options});
   expect(first.id).toBe(73101);
   expect(await page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.method==='schedule').at(-1).plugin)).toBe('RestAlarm');
@@ -82,15 +87,25 @@ test('Android 桥接：提前安排系统提醒，修改截止时间，点击通
   await expect(page.locator('#day-detail')).toBeVisible();
   await expect(page.getByRole('region',{name:'训练计时器'})).toContainText('准备好，再出发');
   expect(await page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.method==='schedule').length)).toBe(2);
-  const cancellations=await page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.plugin==='RestAlarm'&&c.method==='cancel').length);
+  for(let i=0;i<3;i++)await page.getByRole('button',{name:'为杠铃卧推加一组'}).click();
   await page.getByRole('region',{name:'训练计时器'}).getByRole('button',{name:'完成该动作'}).click();
-  await expect.poll(()=>page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.plugin==='RestAlarm'&&c.method==='cancel').length)).toBeGreaterThan(cancellations);
+  await expect(page.getByRole('region',{name:'训练计时器'})).toContainText('动作间休息');
+  await expect.poll(()=>page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.method==='schedule').length)).toBe(3);
+  const next=await page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.method==='schedule').at(-1).options);
+  expect(next.exerciseId).not.toBe(first.exerciseId);
+  expect(next.name).toBe('上斜哑铃卧推');
+  await page.getByRole('button',{name:'关闭计时'}).click();
   await expect(page.getByRole('region',{name:'训练计时器'})).toHaveCount(0);
   await page.getByRole('button',{name:'偏好设置',exact:true}).click();
   await page.getByRole('button',{name:'30 秒后测试后台提醒'}).click();
   const alarm=await page.evaluate(()=>(window as any).nativeTest.calls.filter((c:any)=>c.method==='schedule').at(-1));
   expect(alarm.plugin).toBe('RestAlarm');expect(alarm.options.id).toBe(73102);
   expect(alarm.options.deadline-alarm.at).toBe(30000);
+  // A test start dispatches directly to RestAlarm: no JS permission/channel awaits first.
+  const calls=await page.evaluate(()=>(window as any).nativeTest.calls);
+  const scheduleIndex=calls.findLastIndex((c:any)=>c.method==='schedule');
+  expect(calls[scheduleIndex].plugin).toBe('RestAlarm');
+  await expect(page.getByText('原生计时服务：正在运行',{exact:false})).toBeVisible();
 
 });
 

@@ -1,54 +1,24 @@
 import type { Data } from "./model.ts";
 
-export type AlarmResult = "scheduled" | "needsExact" | "off" | "ready" | "denied";
+export type AlarmResult = "scheduled" | "foreground" | "off" | "ready";
 export type AlarmPort = {
   cancel: () => Promise<void>;
-  clearDelivered: () => Promise<void>;
-  permission: () => Promise<{ display: boolean; exact: boolean }>;
-  prepare: (settings: Data["settings"]) => Promise<string>;
-  schedule: (data: Data, channel: string) => Promise<void>;
+  schedule: (data: Data) => Promise<"scheduled" | "foreground">;
 };
 
-/** Latest change wins, including while an earlier native plugin call is pending. */
+/** Dispatch immediately. Capacitor's native handler and the native store serialize mutations.
+ * Never wait for an earlier JS promise: a paused WebView may not receive that reply yet.
+ */
 export function createRestAlarmScheduler(port: AlarmPort, now = Date.now) {
-  let revision = 0,
-    queue: Promise<unknown> = Promise.resolve();
-  return (data: Data): Promise<AlarmResult> => {
-    const current = ++revision;
-    const operation = queue
-      .catch(() => {})
-      .then(async (): Promise<AlarmResult> => {
-        if (current !== revision) return "off";
-        const timer = data.timer;
-        if (
-          !data.settings.notifications ||
-          !timer ||
-          timer.phase === "work" ||
-          (timer.phase === "ready" && timer.deadline > now())
-        ) {
-          await port.cancel();
-          await port.clearDelivered();
-          return "off";
-        }
-        // A naturally completed alarm must stay in the system notification tray.
-        if (timer.phase !== "rest" || timer.deadline <= now()) return "ready";
-        const status = await port.permission();
-        if (!status.display) {
-          await port.cancel();
-          return "denied";
-        }
-        if (!status.exact) {
-          await port.cancel();
-          return "needsExact";
-        }
-        const channel = await port.prepare(data.settings);
-        if (current !== revision) return "off";
-        await port.cancel();
-        if (current !== revision || timer.deadline <= now()) return "ready";
-        await port.schedule(data, channel);
-        return "scheduled";
-      });
-    queue = operation;
-    return operation;
+  return async (data: Data): Promise<AlarmResult> => {
+    const timer = data.timer;
+    if (!data.settings.notifications || !timer || timer.phase === "work" ||
+        (timer.phase === "ready" && (timer.deadline > now() || timer.deadline === timer.started))) {
+      await port.cancel();
+      return "off";
+    }
+    // Natural expiry remains in the tray; native service/receiver handle it independently.
+    if (timer.phase !== "rest" || timer.deadline <= now()) return "ready";
+    return port.schedule(data);
   };
 }

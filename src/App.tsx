@@ -39,7 +39,7 @@ import {
 import {
   clonePlan,
   completedSets,
-  completeExercise,
+  advanceExercise,
   dateKey,
   emptyDay,
   finishSet,
@@ -118,6 +118,8 @@ export default function App() {
   const [nativeAlarmStatus, setNativeAlarmStatus] = useState("");
   const [nativeResume, setNativeResume] = useState(0);
   const lastReminder = useRef("");
+  const nativeSent = useRef<Data | null>(null);
+  const nativeRevision = useRef(0);
   const latestData = useRef(data);
   latestData.current = data;
   const fileRef = useRef<HTMLInputElement>(null),
@@ -203,40 +205,37 @@ export default function App() {
     )
       void closeRestNotifications();
   }, [timer?.phase, data.settings.notifications]);
+  function arrangeNative(next: Data) {
+    const revision = ++nativeRevision.current;
+    void syncNativeReminder(next).then((result) => {
+      if (revision !== nativeRevision.current) return;
+      setNativeAlarmStatus({
+        scheduled: "通知栏倒计时已启动 · 系统闹钟已安排",
+        foreground: "通知栏倒计时已启动 · 建议允许准时闹钟",
+        off: "", ready: "",
+      }[result]);
+    }).catch((error: unknown) => {
+      if (revision !== nativeRevision.current) return;
+      const message = error instanceof Error ? error.message : "原生计时启动失败";
+      setNativeAlarmStatus(message);
+      notify(`后台提醒未启动：${message}`);
+    });
+  }
+  // User actions dispatch to native immediately, before React's later effect or background pause.
+  function commitTraining(next: Data) {
+    latestData.current = next;
+    setData(next);
+    if (isAndroid) {
+      nativeSent.current = next;
+      arrangeNative(next);
+    }
+  }
   useEffect(() => {
     if (!isAndroid) return;
-    let active = true;
-    void syncNativeReminder(data)
-      .then((result) => {
-        if (active)
-          setNativeAlarmStatus(
-            {
-              scheduled: "Android 系统提醒已安排",
-              needsExact: "后台提醒未启用 · 请允许闹钟与提醒",
-              off: "",
-              ready: "",
-              denied: "通知被禁止，请在设置中允许",
-            }[result],
-          );
-      })
-      .catch(() => {
-        if (active) {
-          setNativeAlarmStatus("提醒安排失败，请检查权限");
-          notify("Android 提醒安排失败，请打开设置检查通知权限。");
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [
-    timer?.phase,
-    timer?.started,
-    timer?.deadline,
-    data.settings.notifications,
-    data.settings.vibration,
-    data.settings.sound,
-    nativeResume,
-  ]);
+    if (nativeSent.current === data) { nativeSent.current = null; return; }
+    arrangeNative(data);
+  }, [timer?.phase, timer?.started, timer?.deadline, timer?.exerciseId,
+    data.settings.notifications, data.settings.vibration, data.settings.sound, nativeResume]);
   function openTraining(target: ReminderTarget | null) {
     setTab("calendar");
     setModal(null);
@@ -324,32 +323,26 @@ export default function App() {
   };
   const start = (id: string, date = selected) => {
     unlockAudio();
-    setData((d) => {
-      if (d.timer?.phase === "work") return d;
-      return {
-        ...d,
-        days: {
-          ...d.days,
-          [date]: {
-            ...d.days[date],
-            exercises: d.days[date].exercises.map((e) =>
-              e.id === id ? { ...e, completed: false } : e),
-          },
-        },
-        timer: {
-          phase: "work",
-          date,
-          exerciseId: id,
-          started: Date.now(),
-          deadline: 0,
-        },
-      };
+    const d = latestData.current;
+    if (d.timer?.phase === "work") return;
+    commitTraining({
+      ...d,
+      days: { ...d.days, [date]: { ...d.days[date], exercises: d.days[date].exercises.map((e) =>
+        e.id === id ? { ...e, completed: false } : e) } },
+      timer: { phase: "work", date, exerciseId: id, started: Date.now(), deadline: 0 },
     });
   };
-  const complete = (id: string, date = selected) => {
-    setData((d) => completeExercise(d, date, id));
+  const complete = () => {
+    const next = advanceExercise(latestData.current, Date.now());
+    commitTraining(next);
     setRestAlert(null);
-    notify("该动作已完成，辛苦了！");
+    notify(next.timer ? "已完成，休息后开始下一个动作" : "该动作已完成，计时已结束");
+  };
+  const showCompletion = (id: string) => {
+    const d = latestData.current;
+    if (d.timer?.phase === "work") return;
+    const now = Date.now();
+    commitTraining({ ...d, timer: { phase: "ready", date: selected, exerciseId: id, started: now, deadline: now } });
   };
   const quick = (e: Exercise) => {
     if (timer?.phase === "work") {
@@ -948,22 +941,13 @@ export default function App() {
                               </span>
                               <button
                                 disabled={timer?.phase === "work"}
-                                onClick={() => start(e.id)}
+                                onClick={() => !e.completed && e.records.length >= e.sets ? showCompletion(e.id) : start(e.id)}
                               >
                                 <Play size={13} />
                                 {e.completed ? "再加练一组" :
-                                  e.records.length ? "开始下一组" : "开始本组"}
+                                  e.records.length >= e.sets ? "查看完成选项" : e.records.length ? "开始下一组" : "开始本组"}
                               </button>
                             </div>
-                            {!e.completed && e.records.length >= e.sets && (
-                              <button
-                                className="complete-exercise"
-                                disabled={timer?.phase === "work"}
-                                onClick={() => complete(e.id)}
-                              >
-                                <Check size={16} /> 完成该动作
-                              </button>
-                            )}
                             {e.records.length > 0 && (
                               <details>
                                 <summary>
@@ -1195,6 +1179,19 @@ export default function App() {
                     <span>秒</span>
                   </div>
                 </label>
+                <label>
+                  <span>动作间休息</span>
+                  <div className="input-unit">
+                    <input aria-label="动作间休息秒数" type="number" min="0" max="3600"
+                      value={data.settings.exerciseRest ?? 120}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isFinite(n) && n >= 0 && n <= 3600)
+                          setData((d) => ({ ...d, settings: { ...d.settings, exerciseRest: n } }));
+                      }} />
+                    <span>秒</span>
+                  </div>
+                </label>
                 <label className="switch-row">
                   <span>
                     <Volume2 size={17} /> 休息结束声音
@@ -1306,11 +1303,11 @@ export default function App() {
               {timer.phase === "work"
                 ? "本组训练中"
                 : timer.phase === "rest"
-                  ? "组间休息"
+                  ? (timer.kind === "exercise" ? "动作间休息" : "组间休息")
                   : "准备好，再出发"}
             </strong>
             <span>
-              {activeExercise.name} · 已完成 {activeExercise.records.length} 组
+              {timer.kind === "exercise" ? "接下来：" : ""}{activeExercise.name} · 已完成 {activeExercise.records.length} 组
             </span>
             {isAndroid && nativeAlarmStatus && (
               <span className="native-alarm-status">{nativeAlarmStatus}</span>
@@ -1320,61 +1317,35 @@ export default function App() {
             {timer.phase === "ready" ? "就绪" : formatTime(activeSeconds)}
           </div>
           <div className="timer-controls">
-            {timer.phase !== "work" && activeExercise.records.length >= activeExercise.sets && (
-              <button className="lime-button" onClick={() => complete(activeExercise.id, timer.date)}>
-                <Check size={17} /> 完成该动作
-              </button>
-            )}
             {timer.phase === "work" ? (
-              <button
-                className="lime-button"
-                onClick={() => setData((d) => finishSet(d, Date.now()))}
-              >
+              <button className="lime-button" onClick={() => commitTraining(finishSet(latestData.current, Date.now()))}>
                 <Check size={18} /> 结束本组
               </button>
+            ) : activeExercise.records.length >= activeExercise.sets ? (
+              <>
+                <button className="lime-button" onClick={complete}>
+                  <Check size={17} /> 完成该动作
+                </button>
+                <button className="timer-add" onClick={() => start(activeExercise.id, timer.date)}>再加练一组</button>
+              </>
             ) : timer.phase === "rest" ? (
               <>
-                <button
-                  className="timer-add"
-                  onClick={() =>
-                    setData((d) =>
-                      d.timer
-                        ? {
-                            ...d,
-                            timer: {
-                              ...d.timer,
-                              deadline: d.timer.deadline + 30000,
-                            },
-                          }
-                        : d,
-                    )
-                  }
-                >
-                  +30 秒
-                </button>
-                <button
-                  className="lime-button"
-                  onClick={() =>
-                    setData((d) =>
-                      d.timer
-                        ? { ...d, timer: { ...d.timer, phase: "ready" } }
-                        : d,
-                    )
-                  }
-                >
-                  <SkipForward size={16} /> 跳过休息
-                </button>
+                <button className="timer-add" onClick={() => {
+                  const d = latestData.current;
+                  if (d.timer) commitTraining({ ...d, timer: { ...d.timer, deadline: d.timer.deadline + 30000 } });
+                }}>+30 秒</button>
+                <button className="lime-button" onClick={() => {
+                  const d = latestData.current;
+                  if (d.timer) commitTraining({ ...d, timer: { ...d.timer, phase: "ready" } });
+                }}><SkipForward size={16} /> 跳过休息</button>
               </>
             ) : (
-              <button
-                className="lime-button"
-                onClick={() => start(activeExercise.id, timer.date)}
-              >
+              <button className="lime-button" onClick={() => start(activeExercise.id, timer.date)}>
                 <Play size={17} /> 开始下一组
               </button>
             )}
           </div>
-          {isAndroid && (!data.settings.notifications || !nativeAlarmStatus.includes("已安排")) && (
+          {isAndroid && (!data.settings.notifications || !nativeAlarmStatus.includes("已启动")) && (
             <button className="timer-reminder-settings" onClick={() => setTab("settings")}>
               {data.settings.notifications ? "检查提醒权限" : "开启后台提醒"}
             </button>
@@ -1388,9 +1359,9 @@ export default function App() {
                     kind: "confirm",
                     title: "放弃本组计时？",
                     text: "本组尚未完成，不会产生完成记录。已完成的组会保留。",
-                    action: () => setData((d) => ({ ...d, timer: null })),
+                    action: () => commitTraining({ ...latestData.current, timer: null }),
                   })
-                : setData((d) => ({ ...d, timer: null }))
+                : commitTraining({ ...latestData.current, timer: null })
             }
           >
             <X size={18} />

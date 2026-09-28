@@ -1,6 +1,6 @@
 {
   "name": "tsport",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "android:sync": "npm run build && cap sync android",
     "android:open": "cap open android",
     "android:apk": "powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1",
-    "test": "node --experimental-strip-types --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "android:test": "powershell -ExecutionPolicy Bypass -File scripts/test-android.ps1"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

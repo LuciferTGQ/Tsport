@@ -27,6 +27,7 @@
 ## 验证与构建
 
 - `npm.cmd test`：数据、计时及通知调度逻辑。
+- `npm.cmd run android:test`：Robolectric Android 16 原生服务/接收器测试；Windows 中文目录自动通过缓存目录联接运行。
 - `npx.cmd playwright test`：交互、网页通知、Android 桥接模拟和手机布局，当前使用 Google Chrome。
 - `npm.cmd run android:apk`：构建并同步前端，再生成 Android debug APK；需要 JDK 21 与 Android SDK 36。
 - 按改动选择必要验证；仅修改说明或仓库配置时无需重复完整 Android 构建。

@@ -1,24 +1,23 @@
 package com.tsport.fitness;
 
 import android.app.AlarmManager;
-import android.app.PendingIntent;
 import android.app.NotificationManager;
-import android.app.NotificationChannel;
-import android.content.Context;
 import android.content.Intent;
-import android.os.Build;
+import android.net.Uri;
+import android.os.*;
+import android.provider.Settings;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import java.util.UUID;
+import org.json.JSONObject;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/** User-started rest timers are alarm clocks, independent of the WebView lifecycle. */
+/** One bridge command performs all native setup; no JS permission/channel/cancel round trips. */
 @CapacitorPlugin(name = "RestAlarm")
 public class RestAlarmPlugin extends Plugin {
     @Override public void load() { deliverTap(getActivity().getIntent()); }
-
     @Override protected void handleOnNewIntent(Intent intent) { deliverTap(intent); }
 
     private void deliverTap(Intent intent) {
@@ -31,49 +30,84 @@ public class RestAlarmPlugin extends Plugin {
     }
 
     @PluginMethod public void schedule(PluginCall call) {
-        Integer id = call.getInt("id");
-        Long deadline = call.getLong("deadline");
-        String channel = call.getString("channelId");
-        if (id == null || (id != 73101 && id != 73102) || deadline == null || channel == null) {
-            call.reject("Invalid rest alarm"); return;
+        JSONObject alarm;
+        try {
+            alarm = RestAlarmStore.schedule(getContext(), call.getData());
+        } catch (Exception error) {
+            RestAlarmStore.event(getContext(), "schedule failed " + error.getClass().getSimpleName());
+            call.reject(error.getMessage(), error); return;
         }
-        AlarmManager manager = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
-        NotificationManager notifications = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
-        NotificationChannel notificationChannel = notifications.getNotificationChannel(channel);
-        if (!notifications.areNotificationsEnabled() || notificationChannel == null || notificationChannel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
-            call.reject("请允许 Tsport 的休息通知频道"); return;
-        }
-        if (Build.VERSION.SDK_INT >= 31 && !manager.canScheduleExactAlarms()) {
-            call.reject("请允许闹钟与提醒权限"); return;
-        }
-        synchronized (RestAlarmReceiver.class) {
-            String token = UUID.randomUUID().toString();
-            Intent intent = RestAlarmReceiver.alarmIntent(getContext(), id)
-                .putExtra("token", token).putExtra("channelId", channel)
-                .putExtra("title", call.getString("title", "休息结束 · Tsport"))
-                .putExtra("body", call.getString("body", "准备好后再开始下一组。"))
-                .putExtra("date", call.getString("date"))
-                .putExtra("exerciseId", call.getString("exerciseId"));
-            PendingIntent operation = PendingIntent.getBroadcast(getContext(), id, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            // Commit before returning to JS: the receiver must also work after process death.
-            RestAlarmReceiver.preferences(getContext()).edit().putString("alarm-" + id, token).commit();
-            try {
-                manager.setAlarmClock(new AlarmManager.AlarmClockInfo(
-                    Math.max(System.currentTimeMillis() + 100, deadline),
-                    RestAlarmReceiver.openIntent(getContext(), id, intent)), operation);
-                call.resolve();
-            } catch (Exception error) {
-                RestAlarmReceiver.cancel(getContext(), id);
-                call.reject("无法安排后台提醒", error);
+        int id = alarm.optInt("id");
+        String token = alarm.optString("token");
+        AtomicBoolean answered = new AtomicBoolean();
+        Handler main = new Handler(Looper.getMainLooper());
+        Runnable timeout = () -> {
+            if (!answered.compareAndSet(false, true)) return;
+            cancelIfCurrent(id, token);
+            call.reject("后台计时服务启动超时，请查看后台计时状态");
+        };
+        ResultReceiver reply = new ResultReceiver(main) {
+            @Override protected void onReceiveResult(int code, Bundle result) {
+                if (!answered.compareAndSet(false, true)) return;
+                main.removeCallbacks(timeout);
+                if (code == 1) {
+                    JSObject response = new JSObject();
+                    response.put("status", alarm.optBoolean("exact") ? "scheduled" : "foreground");
+                    call.resolve(response);
+                } else {
+                    cancelIfCurrent(id, token);
+                    call.reject("后台服务启动失败：" + result.getString("error", "未知原因"));
+                }
             }
+        };
+        main.postDelayed(timeout, 8000);
+        try {
+            getContext().startForegroundService(new Intent(getContext(), RestTimerService.class)
+                .putExtra("payload", alarm.toString()).putExtra("reply", reply));
+        } catch (Exception error) {
+            main.removeCallbacks(timeout);
+            if (answered.compareAndSet(false, true)) {
+                cancelIfCurrent(id, token);
+                call.reject("无法启动常驻倒计时：" + error.getMessage(), error);
+            }
+        }
+    }
+
+    private void cancelIfCurrent(int id, String token) {
+        synchronized (RestAlarmStore.class) {
+            JSONObject current = RestAlarmStore.read(getContext(), id);
+            if (current != null && token.equals(current.optString("token"))) RestAlarmStore.cancel(getContext(), id);
         }
     }
 
     @PluginMethod public void cancel(PluginCall call) {
         Integer id = call.getInt("id");
-        if (id == null || (id != 73101 && id != 73102)) { call.reject("Invalid alarm id"); return; }
-        synchronized (RestAlarmReceiver.class) { RestAlarmReceiver.cancel(getContext(), id); }
+        if (id == null || (id != RestAlarmStore.REST && id != RestAlarmStore.TEST)) { call.reject("Invalid alarm id"); return; }
+        RestAlarmStore.cancel(getContext(), id);
         call.resolve();
+    }
+
+    @PluginMethod public void status(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("version", BuildConfig.VERSION_NAME);
+        result.put("device", Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE + " / API " + Build.VERSION.SDK_INT);
+        result.put("serviceRunning", RestTimerService.running());
+        result.put("activeTimers", RestAlarmStore.active(getContext()).size());
+        result.put("display", getContext().getSystemService(NotificationManager.class).areNotificationsEnabled());
+        result.put("exact", Build.VERSION.SDK_INT < 31 || getContext().getSystemService(AlarmManager.class).canScheduleExactAlarms());
+        result.put("batteryUnrestricted", getContext().getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(getContext().getPackageName()));
+        result.put("events", RestAlarmStore.prefs(getContext()).getString("events", "尚无原生计时记录"));
+        call.resolve(result);
+    }
+
+    @PluginMethod public void openSettings(PluginCall call) {
+        String page = call.getString("page", "app");
+        Intent intent;
+        if (page.equals("battery")) intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+        else if (page.equals("notifications")) intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        else intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getContext().getPackageName()));
+        try { getActivity().startActivity(intent); call.resolve(); }
+        catch (Exception error) { call.reject("无法打开此系统设置", error); }
     }
 }

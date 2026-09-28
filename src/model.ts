@@ -23,6 +23,7 @@ export type Timer = {
   exerciseId: string;
   started: number;
   deadline: number;
+  kind?: "set" | "exercise";
 } | null;
 export type Data = {
   version: 1;
@@ -32,6 +33,7 @@ export type Data = {
   templates: { id: string; name: string; day: Day }[];
   settings: {
     rest: number;
+    exerciseRest?: number;
     sound: boolean;
     notifications?: boolean;
     vibration?: boolean;
@@ -66,7 +68,7 @@ export const initialData = (): Data => ({
     { id: "rest", name: "休息", color: "#e8e9ed" },
   ],
   templates: [],
-  settings: { rest: 120, sound: true, notifications: false, vibration: true },
+  settings: { rest: 120, exerciseRest: 120, sound: true, notifications: false, vibration: true },
   timer: null,
 });
 /** Add the built-in rest label to older installations without altering their days. */
@@ -98,6 +100,21 @@ export function completeExercise(data: Data, date: string, id: string): Data {
     },
     timer: data.timer?.date === date && data.timer.exerciseId === id ? null : data.timer,
   };
+}
+export function advanceExercise(data: Data, now: number): Data {
+  const timer = data.timer;
+  if (!timer || timer.phase === "work") return data;
+  const completed = completeExercise(data, timer.date, timer.exerciseId);
+  if (completed === data) return data;
+  const exercises = completed.days[timer.date].exercises;
+  const index = exercises.findIndex((e) => e.id === timer.exerciseId);
+  const next = exercises.slice(index + 1).find((e) => !e.completed && e.records.length < e.sets);
+  if (!next) return completed;
+  const rest = data.settings.exerciseRest ?? 120;
+  return { ...completed, timer: {
+    phase: rest > 0 ? "rest" : "ready", kind: "exercise",
+    date: timer.date, exerciseId: next.id, started: now, deadline: now + rest * 1000,
+  } };
 }
 export function samplePlan(rest: number): Day {
   return {
@@ -145,6 +162,7 @@ export function finishSet(data: Data, now: number): Data {
     },
     timer: {
       ...t,
+      kind: "set",
       phase: exercise.rest > 0 ? "rest" : "ready",
       started: now,
       deadline: now + exercise.rest * 1000,
@@ -218,6 +236,7 @@ export function validateData(value: unknown): value is Data {
       Array.isArray(d.templates) &&
       d.templates.every((t) => str(t.id) && str(t.name) && day(t.day)) &&
       num(d.settings.rest, 0, 3600) &&
+      (d.settings.exerciseRest === undefined || num(d.settings.exerciseRest, 0, 3600)) &&
       typeof d.settings.sound === "boolean" &&
       (d.settings.notifications === undefined ||
         typeof d.settings.notifications === "boolean") &&
@@ -226,6 +245,7 @@ export function validateData(value: unknown): value is Data {
       (d.timer === null ||
         (!!d.timer &&
           ["work", "rest", "ready"].includes(d.timer.phase) &&
+          (d.timer.kind === undefined || ["set", "exercise"].includes(d.timer.kind)) &&
           date(d.timer.date) &&
           str(d.timer.exerciseId) &&
           num(d.timer.started, 0, 8640000000000000) &&

@@ -9,6 +9,10 @@ import {
   openExactAlarmSettings,
   testNativeReminder,
   type NativeStatus,
+  readNativeDiagnostics,
+  openNativeSettings,
+  cancelNativeTest,
+  type NativeDiagnostics,
 } from "./nativeReminders";
 
 export default function AndroidReminderSettings({
@@ -27,6 +31,15 @@ export default function AndroidReminderSettings({
       exact: false,
     }),
     [busy, setBusy] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<NativeDiagnostics | null>(null);
+  const inspect = async () => {
+    try { setDiagnostics(await readNativeDiagnostics()); }
+    catch (error) { notify(`无法读取原生状态：${error instanceof Error ? error.message : "请确认已安装新版 APK"}`); }
+  };
+  const systemSettings = async (page: "battery" | "notifications") => {
+    try { await openNativeSettings(page); }
+    catch { notify("无法打开设置，请在手机设置中搜索 Tsport。"); }
+  };
   useEffect(() => {
     const refresh = () => {
       void nativeReminderStatus()
@@ -53,6 +66,7 @@ export default function AndroidReminderSettings({
           disabled={busy}
           onChange={async () => {
             if (settings.notifications && status.display) {
+              void cancelNativeTest();
               onChange({ notifications: false });
               return;
             }
@@ -72,8 +86,8 @@ export default function AndroidReminderSettings({
         />
       </label>
       <p className="reminder-description">
-        {settings.notifications && status.display && status.exact
-          ? "后台提醒已开启。休息开始时交给 Android 闹钟，切到其他应用仍可提醒。"
+        {settings.notifications && status.display
+          ? "休息开始后，通知栏会出现常驻倒计时；原生服务负责到点提醒，切换应用不依赖页面计时。"
           : "开启后请允许 Android 通知权限。到点显示通知，点击回到对应训练。"}
       </p>
       <label className="switch-row">
@@ -93,7 +107,7 @@ export default function AndroidReminderSettings({
         <p className="reminder-description">
           {status.exact
             ? "休息截止时间由 Android 系统计时。"
-            : "后台准时提醒尚未启用，请允许“闹钟与提醒”。"}
+            : "常驻倒计时仍可运行；建议允许“闹钟与提醒”，为锁屏或服务被清理时增加系统闹钟保障。"}
         </p>
         {!status.exact && (
           <button
@@ -113,14 +127,15 @@ export default function AndroidReminderSettings({
       </div>
       <button
         className="secondary wide"
-        disabled={!status.display || !status.exact || busy}
+        disabled={!status.display || busy}
         onClick={async () => {
           setBusy(true);
           try {
             await testNativeReminder(target, settings);
-            notify("已安排 30 秒后提醒，现在请切到其他应用或锁屏等待。");
-          } catch {
-            notify("通知发送失败，请检查手机通知设置。");
+            await inspect();
+            notify("常驻倒计时已启动，请下拉通知栏确认，再切到其他应用等待 30 秒。");
+          } catch (error) {
+            notify(`后台测试未启动：${error instanceof Error ? error.message : "请检查原生状态"}`);
           } finally {
             setBusy(false);
           }
@@ -128,9 +143,22 @@ export default function AndroidReminderSettings({
       >
         <Bell size={17} /> 30 秒后测试后台提醒
       </button>
+      <button className="secondary wide" onClick={async () => { await cancelNativeTest(); await inspect(); }}>取消后台测试</button>
+      <button className="secondary wide" onClick={inspect}>检查后台计时状态</button>
+      {diagnostics && (
+        <div className="native-diagnostics">
+          <p>Tsport {diagnostics.version} · {diagnostics.device}</p>
+          <p>原生计时服务：{diagnostics.serviceRunning ? "正在运行" : "未运行"} · 待完成计时：{diagnostics.activeTimers}</p>
+          <p>通知：{diagnostics.display ? "允许" : "未允许"} · 准时闹钟：{diagnostics.exact ? "允许" : "未允许"}</p>
+          <p>系统电池优化：{diagnostics.batteryUnrestricted ? "已豁免" : "未豁免（不代表服务一定被限制）"}</p>
+          <details><summary>查看原生运行记录</summary><pre>{diagnostics.events}</pre></details>
+        </div>
+      )}
+      <button className="secondary wide" onClick={() => systemSettings("notifications")}>打开系统通知设置</button>
+      <button className="secondary wide" onClick={() => systemSettings("battery")}>打开系统电池优化设置</button>
       <p className="reminder-description">
-        如未弹出横幅，请在手机的 Tsport
-        通知设置中允许横幅、声音和震动。勿扰模式、强行停止应用及厂商省电限制仍可能影响提醒。
+        iQOO / vivo：如后台测试仍无提醒，请检查系统中 Tsport 的后台耗电管理是否允许后台运行。
+        下拉通知栏应能看到倒计时；是否显示顶部横幅取决于通知设置。强行停止会终止计时。
       </p>
     </div>
   );

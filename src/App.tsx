@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReminderSettings from "./ReminderSettings";
 import AndroidReminderSettings from "./AndroidReminderSettings";
+import { SortableExercises, SortableExerciseCard } from "./SortableExercises";
 import {
   isAndroid,
   syncNativeReminder,
@@ -48,6 +49,7 @@ import {
   migrateData,
   newExercise,
   parseDate,
+  reorderExercise,
   samplePlan,
   settleTimer,
   uid,
@@ -649,7 +651,7 @@ export default function App() {
                 <Stat
                   icon={<Scale />}
                   title="最新体重"
-                  value={latest ? latest[1] : "—"}
+                  value={latest ? latest[1].toFixed(2) : "—"}
                   unit="kg"
                   detail={latest ? `${latest[0]} 记录` : "从第一次记录开始"}
                   onClick={() => setModal({ kind: "weight" })}
@@ -827,7 +829,7 @@ export default function App() {
                     >
                       <Scale size={14} />
                       {data.weights[selected]
-                        ? `${data.weights[selected]} kg`
+                        ? `${data.weights[selected].toFixed(2)} kg`
                         : "记体重"}
                     </button>
                   </div>
@@ -849,14 +851,20 @@ export default function App() {
                           }}
                         />
                       </div>
-                      <div className="exercise-list">
+                      <SortableExercises
+                        key={selected}
+                        exercises={day.exercises}
+                        onMove={(activeId, overId) => setData((d) => reorderExercise(d, selected, activeId, overId))}
+                      >
                         {day.exercises.map((e, index) => (
-                          <article
-                            id={`exercise-${e.id}`}
-                            className={`exercise-card ${timer?.exerciseId === e.id ? "focused" : ""}`}
+                          <SortableExerciseCard
+                            exercise={e}
+                            focused={timer?.date === selected && timer.exerciseId === e.id}
                             key={e.id}
                           >
+                            {(dragHandle) => <>
                             <div className="exercise-head">
+                              {dragHandle}
                               <span className="exercise-index">
                                 {String(index + 1).padStart(2, "0")}
                               </span>
@@ -985,9 +993,10 @@ export default function App() {
                                 ))}
                               </details>
                             )}
-                          </article>
+                            </>}
+                          </SortableExerciseCard>
                         ))}
-                      </div>
+                      </SortableExercises>
                     </>
                   ) : (
                     <div className="empty-plan">
@@ -1046,7 +1055,7 @@ export default function App() {
                 <Stat
                   icon={<Scale />}
                   title="最新体重"
-                  value={latest ? latest[1] : "—"}
+                  value={latest ? latest[1].toFixed(2) : "—"}
                   unit="kg"
                   detail={latest?.[0] ?? "尚未记录"}
                 />
@@ -1055,7 +1064,7 @@ export default function App() {
                   title="区间变化"
                   value={
                     visibleWeights.length > 1
-                      ? `${visibleWeights.at(-1)![1] - visibleWeights[0][1] > 0 ? "+" : ""}${(visibleWeights.at(-1)![1] - visibleWeights[0][1]).toFixed(1)}`
+                      ? `${visibleWeights.at(-1)![1] - visibleWeights[0][1] > 0 ? "+" : ""}${(visibleWeights.at(-1)![1] - visibleWeights[0][1]).toFixed(2)}`
                       : "—"
                   }
                   unit="kg"
@@ -1108,7 +1117,7 @@ export default function App() {
                     <div className="weight-row" key={date}>
                       <span>{date}</span>
                       <strong>
-                        {kg} <small>kg</small>
+                        {kg.toFixed(2)} <small>kg</small>
                       </strong>
                       <button
                         className="icon-button"
@@ -1127,7 +1136,7 @@ export default function App() {
                           setModal({
                             kind: "confirm",
                             title: "删除体重记录？",
-                            text: `删除 ${date} 的 ${kg} kg 记录。`,
+                            text: `删除 ${date} 的 ${kg.toFixed(2)} kg 记录。`,
                             action: () =>
                               setData((d) => {
                                 const w = { ...d.weights };
@@ -1866,7 +1875,7 @@ function WeightChart({ points }: { points: [string, number][] }) {
     );
   const width = 900,
     height = 290,
-    pad = 45;
+    pad = 55;
   const vals = points.map((p) => p[1]),
     min = Math.floor(Math.min(...vals) - 1),
     max = Math.ceil(Math.max(...vals) + 1),
@@ -1889,7 +1898,7 @@ function WeightChart({ points }: { points: [string, number][] }) {
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label={`体重曲线，共${points.length}笔记录，从${points[0][1]}到${points.at(-1)![1]}公斤`}
+        aria-label={`体重曲线，共${points.length}笔记录，从${points[0][1].toFixed(2)}到${points.at(-1)![1].toFixed(2)}公斤`}
       >
         <defs>
           <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
@@ -1916,7 +1925,7 @@ function WeightChart({ points }: { points: [string, number][] }) {
                 fill="#7b8581"
                 fontSize="13"
               >
-                {(max - (i * (max - min)) / 4).toFixed(1)}
+                {(max - (i * (max - min)) / 4).toFixed(2)}
               </text>
             </g>
           );
@@ -1945,7 +1954,7 @@ function WeightChart({ points }: { points: [string, number][] }) {
               strokeWidth="2"
             >
               <title>
-                {p.date} · {p.kg} kg
+                {p.date} · {p.kg.toFixed(2)} kg
               </title>
             </circle>
           </g>
@@ -1985,7 +1994,7 @@ function WeightForm({
 }) {
   const initial = selected > today ? today : selected;
   const [date, setDate] = useState(initial),
-    [kg, setKg] = useState(weights[initial]?.toString() ?? "");
+    [kg, setKg] = useState(weights[initial]?.toFixed(2) ?? "");
   return (
     <form
       onSubmit={(e) => {
@@ -2004,7 +2013,7 @@ function WeightForm({
           value={date}
           onChange={(e) => {
             setDate(e.target.value);
-            setKg(weights[e.target.value]?.toString() ?? "");
+            setKg(weights[e.target.value]?.toFixed(2) ?? "");
           }}
         />
       </label>
@@ -2017,13 +2026,14 @@ function WeightForm({
           required
           min="1"
           max="500"
-          step="0.1"
-          placeholder="例如 72.5"
+          step="0.01"
+          inputMode="decimal"
+          placeholder="例如 72.55"
           value={kg}
           onChange={(e) => setKg(e.target.value)}
         />
       </label>
-      <p className="subtle">同一天再次保存会更新该天的体重。</p>
+      <p className="subtle">支持两位小数。同一天再次保存会更新该天的体重。</p>
       <button className="primary wide" type="submit">
         保存体重
       </button>

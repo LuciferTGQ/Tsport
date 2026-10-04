@@ -1,5 +1,5 @@
 importScripts("/notification-events.js");
-const CACHE = "tsport-shell-v2";
+const CACHE = "tsport-shell-v3";
 const DEV = new URL(self.location.href).searchParams.has("dev");
 self.addEventListener("install", (event) => {
   if (DEV) {

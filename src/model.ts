@@ -101,6 +101,17 @@ export function completeExercise(data: Data, date: string, id: string): Data {
     timer: data.timer?.date === date && data.timer.exerciseId === id ? null : data.timer,
   };
 }
+/** Move a whole exercise, retaining its identity, history and any active timer. */
+export function reorderExercise(data: Data, date: string, activeId: string, overId: string): Data {
+  const day = data.days[date];
+  if (!day || activeId === overId) return data;
+  const from = day.exercises.findIndex((e) => e.id === activeId);
+  const to = day.exercises.findIndex((e) => e.id === overId);
+  if (from < 0 || to < 0) return data;
+  const exercises = [...day.exercises];
+  exercises.splice(to, 0, exercises.splice(from, 1)[0]);
+  return { ...data, days: { ...data.days, [date]: { ...day, exercises } } };
+}
 export function advanceExercise(data: Data, now: number): Data {
   const timer = data.timer;
   if (!timer || timer.phase === "work") return data;
@@ -108,7 +119,9 @@ export function advanceExercise(data: Data, now: number): Data {
   if (completed === data) return data;
   const exercises = completed.days[timer.date].exercises;
   const index = exercises.findIndex((e) => e.id === timer.exerciseId);
-  const next = exercises.slice(index + 1).find((e) => !e.completed && e.records.length < e.sets);
+  // Sorting during a workout can move unfinished exercises before the current one.
+  const next = [...exercises.slice(index + 1), ...exercises.slice(0, index)]
+    .find((e) => !e.completed && e.records.length < e.sets);
   if (!next) return completed;
   const rest = data.settings.exerciseRest ?? 120;
   return { ...completed, timer: {

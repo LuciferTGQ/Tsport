@@ -653,7 +653,54 @@ h1 {
   border: 1px solid #e7eee8;
   border-radius: 9px;
   padding: 13px 14px;
+  background: #fff;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+.sort-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: -7px 23px 12px;
+  color: #7b9081;
+  font-size: 11px;
+}
+.exercise-drag-handle {
+  flex: 0 0 28px;
+  min-height: 32px;
+  padding: 0;
+  color: #93a599;
+  cursor: grab;
+  margin: -3px -5px -3px -7px;
+}
+.exercise-drag-handle:focus-visible {
+  outline: 2px solid #719d80;
+  border-radius: 4px;
+}
+.exercise-card.dragging {
+  opacity: .3;
+  border: 1px dashed #477e57;
+}
+.sorting { cursor: grabbing; }
+.exercise-drag-preview {
+  box-sizing: border-box;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  background: #f3faf5;
+  border: 2px solid #719d80;
+  border-radius: 9px;
+  box-shadow: 0 10px 30px #173f3330;
+  color: #385c43;
+  cursor: grabbing;
+}
+.exercise-drag-preview > div { display: flex; align-items: center; gap: 8px; }
+.exercise-drag-preview span { font-size: 12px; }
+.exercise-drag-preview small { font-size: 11px; color: #738a79; }
 .exercise-card.focused {
   border-color: #719d80;
   background: #fcfefc;

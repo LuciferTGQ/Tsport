@@ -1,4 +1,177 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page, type Locator } from "@playwright/test";
+import { dateKey, initialData, newExercise, samplePlan } from "../src/model";
+
+test("体重两位小数可编辑、显示微小变化并经刷新和备份保留", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "体重趋势", exact: true }).click();
+  await page.getByRole("button", { name: "记录体重", exact: true }).click();
+  await page.getByLabel("体重日期").fill("2026-01-01");
+  await page.getByLabel("体重公斤").fill("72.55");
+  await page.getByRole("button", { name: "保存体重", exact: true }).click();
+  await page.getByRole("button", { name: "记录体重", exact: true }).click();
+  await page.getByLabel("体重日期").fill("2026-01-02");
+  await page.getByLabel("体重公斤").fill("72.57");
+  await page.getByRole("button", { name: "保存体重", exact: true }).click();
+  await page.getByRole("button", { name: "编辑2026-01-02体重" }).click();
+  await expect(page.getByLabel("体重公斤")).toHaveValue("72.57");
+  await page.getByLabel("体重公斤").fill("72.56");
+  await page.getByRole("button", { name: "保存体重", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "体重趋势", exact: true }).click();
+  await page.getByRole("button", { name: "全部", exact: true }).click();
+  await expect(page.locator(".stat-value").nth(0)).toContainText("72.56");
+  await expect(page.locator(".stat-value").nth(1)).toContainText("+0.01");
+  await expect(page.locator(".weight-row strong")).toHaveText(["72.56 kg", "72.55 kg"]);
+  await expect(page.getByRole("img", { name: /体重曲线/ })).toHaveAttribute("aria-label", /从72.55到72.56公斤/);
+  await page.getByRole("button", { name: "偏好设置", exact: true }).click();
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出全部记录" }).click();
+  const backup = await (await downloaded).path();
+  await page.locator("input[type=file]").setInputFiles(backup!);
+  await page.getByRole("button", { name: "确认", exact: true }).click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("tsport-v1")!).weights))
+    .toEqual({ "2026-01-01": 72.55, "2026-01-02": 72.56 });
+  await page.getByRole("button", { name: "训练日历", exact: true }).click();
+  await page.getByLabel("选择年月").fill("2026-01");
+  await page.getByRole("button", { name: "2026-01-02", exact: true }).click();
+  await expect(page.locator(".weight-chip")).toContainText("72.56 kg");
+});
+
+test.describe("手机长按排序", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  async function seed(page: Page) {
+    const data = initialData(), date = dateKey();
+    data.days[date] = samplePlan(120);
+    data.days[date].exercises[0].sets = 1;
+    data.days[date].exercises.push(newExercise("哑铃飞鸟", 120), newExercise("器械推胸", 120));
+    await page.addInitScript((data) => {
+      if (!localStorage.getItem("tsport-v1")) localStorage.setItem("tsport-v1", JSON.stringify(data));
+    }, data);
+    await page.goto("/");
+    return data.days[date].exercises;
+  }
+
+  async function align(page: Page, locator: Locator, top = 160) {
+    await locator.evaluate((node, y) => window.scrollBy(0, node.getBoundingClientRect().top - y), top);
+  }
+
+  async function pickup(page: Page, locator: Locator) {
+    const cdp = await page.context().newCDPSession(page);
+    const box = (await locator.boundingBox())!;
+    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await expect(page.locator(".exercise-drag-preview")).toBeVisible();
+    return { cdp, x, y };
+  }
+
+  async function drag(page: Page, from: Locator, to: Locator) {
+    const { cdp, x, y } = await pickup(page, from);
+    const target = (await to.boundingBox())!;
+    const end = target.y + target.height / 2;
+    for (let i = 1; i <= 12; i++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + (end - y) * i / 12 }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect(page.locator(".exercise-drag-preview")).toHaveCount(0);
+    await cdp.detach();
+  }
+
+  test("上移下移动作并保留训练计时、记录和刷新后的顺序", async ({ page }) => {
+    const exercises = await seed(page);
+    const cards = page.locator(".exercise-card");
+    const card = (name: string) => cards.filter({ has: page.getByRole("button", { name, exact: true }) });
+    const names = () => cards.locator(".exercise-name").allTextContents();
+    await cards.first().getByRole("button", { name: "开始本组", exact: true }).tap();
+    await page.getByRole("button", { name: "结束本组", exact: true }).tap();
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("tsport-v1")!));
+    // Long press the title itself; releasing after a drag must not open its editor.
+    await align(page, card("上斜哑铃卧推"), 140);
+    await drag(page, card("俯卧撑").locator(".exercise-name"), card("上斜哑铃卧推").locator(".exercise-name"));
+    await expect.poll(names).toEqual(["杠铃卧推", "俯卧撑", "上斜哑铃卧推", "绳索夹胸", "哑铃飞鸟", "器械推胸"]);
+    await expect(page.getByLabel("动作名称")).toHaveCount(0);
+    const moved = await page.evaluate(() => JSON.parse(localStorage.getItem("tsport-v1")!));
+    expect(moved.timer).toEqual(stored.timer);
+    expect(moved.days[dateKey()].exercises[0].records).toEqual(stored.days[dateKey()].exercises[0].records);
+    await align(page, card("俯卧撑"), 140);
+    await drag(page, card("俯卧撑").locator(".exercise-info"), card("绳索夹胸").locator(".exercise-info"));
+    await expect.poll(names).toEqual(exercises.map((e) => e.name));
+    await align(page, card("上斜哑铃卧推"), 140);
+    await drag(page, card("俯卧撑").locator(".exercise-name"), card("上斜哑铃卧推").locator(".exercise-name"));
+    await page.reload();
+    await expect.poll(names).toEqual(["杠铃卧推", "俯卧撑", "上斜哑铃卧推", "绳索夹胸", "哑铃飞鸟", "器械推胸"]);
+    const dock = page.getByRole("region", { name: "训练计时器" });
+    await dock.getByRole("button", { name: "完成该动作" }).tap();
+    await expect(dock).toContainText("接下来：俯卧撑");
+    await dock.getByRole("button", { name: "跳过休息" }).tap();
+    await dock.getByRole("button", { name: "开始下一组" }).tap();
+    await dock.getByRole("button", { name: "结束本组" }).tap();
+    await expect(card("俯卧撑")).toContainText("1 组完成");
+    await expect(card("杠铃卧推")).toContainText("1 组完成");
+    await card("上斜哑铃卧推").locator(".exercise-name").tap();
+    await expect(page.getByLabel("动作名称")).toHaveValue("上斜哑铃卧推");
+  });
+
+  test("普通滑动滚屏、长按拖动可自动滚屏，取消不保存", async ({ page }) => {
+    const exercises = await seed(page);
+    const first = page.locator(".exercise-card").first();
+    await align(page, first, 220);
+    const cdp = await page.context().newCDPSession(page);
+    const scroll = await page.evaluate(() => scrollY);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 150, y: 295 }] });
+    for (let y = 275; y >= 155; y -= 20) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 150, y }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scroll);
+    await expect(page.locator(".exercise-drag-preview")).toHaveCount(0);
+    await expect(page.locator(".exercise-name")).toHaveText(exercises.map((e) => e.name));
+    await align(page, first, 140);
+    const held = await pickup(page, first.locator(".exercise-name"));
+    await held.cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: held.x, y: 370 }] });
+    await held.cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+    await expect(page.locator(".exercise-drag-preview")).toHaveCount(0);
+    await expect(page.locator(".exercise-name")).toHaveText(exercises.map((e) => e.name));
+    await held.cdp.detach();
+    await align(page, first, 140);
+    const dragging = await pickup(page, first.locator(".exercise-name"));
+    const before = await page.evaluate(() => scrollY);
+    await dragging.cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: dragging.x, y: 765 }] });
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(before + 250);
+    await expect.poll(async () => (await page.locator(".exercise-card").last().boundingBox())!.y).toBeLessThan(740);
+    await page.screenshot({ path: "artifacts/mobile-sort.png" });
+    await dragging.cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect(page.locator(".exercise-name").last()).toHaveText("杠铃卧推");
+    await dragging.cdp.detach();
+    await cdp.detach();
+  });
+});
+
+test("键盘排序可提交或取消，其他动作按钮正常工作", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "载入四动作示例" }).click();
+  const handle = page.getByRole("button", { name: "调整杠铃卧推顺序" });
+  await handle.focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator(".exercise-drag-preview")).toBeVisible();
+  // Keyboard coordinates become available after the newly mounted overlay is measured.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('[id^="DndLiveRegion-"]')).toContainText("移至第 2 位");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".exercise-drag-preview")).toHaveCount(0);
+  await expect(page.locator(".exercise-name").first()).toHaveText("杠铃卧推");
+  await handle.focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator(".exercise-drag-preview")).toBeVisible();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator('[id^="DndLiveRegion-"]')).toContainText("移至第 2 位");
+  await page.keyboard.press("Space");
+  await expect(page.locator(".exercise-name")).toHaveText(["上斜哑铃卧推", "杠铃卧推", "绳索夹胸", "俯卧撑"]);
+  await page.getByRole("button", { name: "为杠铃卧推加一组", exact: true }).click();
+  await expect(page.locator(".exercise-card").nth(1)).toContainText("1 组完成");
+});
 
 test("休息标签与绿色卡片连续切换动作，刷新后记录归属正确", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 740 });

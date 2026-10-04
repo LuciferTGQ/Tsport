@@ -13,7 +13,47 @@ import {
   migrateData,
   completeExercise,
   advanceExercise,
+  reorderExercise,
 } from "../src/model.ts";
+
+test("动作上下移动保留计时、历史与其他日期，模板采用新顺序", () => {
+  const data = initialData(), date = "2026-10-04";
+  data.days[date] = samplePlan(120);
+  data.days["2026-10-03"] = samplePlan(90);
+  const [first, second, third, fourth] = data.days[date].exercises;
+  first.records.push({ id: "past", reps: 8, kg: 30, duration: 45, at: 1000 });
+  data.timer = { phase: "work", date, exerciseId: first.id, started: 2000, deadline: 0 };
+  const moved = reorderExercise(data, date, fourth.id, second.id);
+  assert.deepEqual(moved.days[date].exercises, [first, fourth, second, third]);
+  assert.equal(moved.timer, data.timer);
+  assert.equal(moved.days[date].exercises[0], first);
+  assert.equal(moved.days["2026-10-03"], data.days["2026-10-03"]);
+  assert.deepEqual(data.days[date].exercises, [first, second, third, fourth]);
+  const down = reorderExercise(moved, date, first.id, second.id);
+  assert.deepEqual(down.days[date].exercises, [fourth, second, first, third]);
+  const ended = finishSet(down, 42000);
+  assert.deepEqual(ended.days[date].exercises[2].records[0], first.records[0]);
+  assert.equal(ended.days[date].exercises[2].records[1].duration, 40);
+  assert.equal(ended.days[date].exercises[0].records.length, 0);
+  assert.deepEqual(clonePlan(down.days[date]).exercises.map((e) => e.name), [fourth, second, first, third].map((e) => e.name));
+  assert.ok(validateData(JSON.parse(JSON.stringify(down))));
+  assert.equal(reorderExercise(data, date, "missing", first.id), data);
+  assert.equal(reorderExercise(data, "2026-01-01", first.id, second.id), data);
+  assert.equal(reorderExercise(data, date, first.id, first.id), data);
+});
+
+test("完成动作按排序后的顺序切换，也不会漏掉被移到前面的未完成动作", () => {
+  const data = initialData(), date = "2026-10-04";
+  data.days[date] = samplePlan(120);
+  const [first, second, third, fourth] = data.days[date].exercises;
+  first.sets = 1;
+  data.timer = { phase: "work", date, exerciseId: first.id, started: 0, deadline: 0 };
+  const ended = finishSet(data, 1000);
+  const reordered = reorderExercise(ended, date, fourth.id, second.id);
+  assert.equal(advanceExercise(reordered, 2000).timer?.exerciseId, fourth.id);
+  const toLast = reorderExercise(reordered, date, first.id, third.id);
+  assert.equal(advanceExercise(toLast, 2000).timer?.exerciseId, fourth.id);
+});
 
 test("绿色卡片完成动作后进入下一动作休息，下一组只写入下一动作", () => {
   let data = initialData();

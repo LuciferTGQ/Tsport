@@ -10,6 +10,7 @@ android/local.properties
 !releases/Tsport-1.0.1-debug.apk
 !releases/Tsport-1.0.2-debug.apk
 !releases/Tsport-1.0.3-debug.apk
+!releases/Tsport-1.0.4-debug.apk
 .env
 .env.*
 !.env.example

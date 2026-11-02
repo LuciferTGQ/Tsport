@@ -14,7 +14,90 @@ import {
   completeExercise,
   advanceExercise,
   reorderExercise,
+  weightForSet,
+  cloneExercisePlan,
+  saveExercisePreset,
 } from "../src/model.ts";
+
+test("递增组记录对应的目标重量，加练沿用最后一组，旧动作仍使用统一重量", () => {
+  let data = initialData();
+  const date = "2026-11-01";
+  data.days[date] = samplePlan(0);
+  const exercise = data.days[date].exercises[0];
+  exercise.kg = 15;
+  assert.equal(weightForSet(exercise), 15);
+  assert.equal(weightForSet(exercise, 8), 15);
+  exercise.targetWeights = [0, 20, 22.5, 25];
+  for (let index = 0; index < 5; index++) {
+    data = { ...data, timer: { phase: "work", date, exerciseId: exercise.id, started: index * 100000, deadline: 0 } };
+    data = finishSet(data, index * 100000 + 40000);
+  }
+  const trained = data.days[date].exercises[0];
+  assert.deepEqual(trained.records.map((r) => r.kg), [0, 20, 22.5, 25, 25]);
+  assert.ok(trained.records.every((r) => r.reps === 12 && r.duration === 40));
+  assert.equal(exercise.records.length, 0);
+  const changed = { ...trained, kg: 30, targetWeights: [5, 25, 27.5, 30] };
+  assert.equal(weightForSet(changed), 30);
+  assert.deepEqual(changed.records.map((r) => r.kg), [0, 20, 22.5, 25, 25]);
+  assert.ok(validateData(JSON.parse(JSON.stringify(data))));
+});
+
+test("保存动作只带计划并独立复制每组重量，更新动作库不修改已添加动作", () => {
+  const exercise = samplePlan(90).exercises[0];
+  exercise.targetWeights = [10, 15, 20, 25];
+  exercise.completed = true;
+  exercise.records = [{ id: "past", reps: 8, kg: 22.5, duration: 30, at: 1000 }];
+  const preset = saveExercisePreset(exercise, "胸");
+  const first = cloneExercisePlan(preset.exercise);
+  const second = cloneExercisePlan(preset.exercise);
+  assert.notEqual(preset.exercise.id, exercise.id);
+  assert.notEqual(first.id, second.id);
+  assert.deepEqual(preset.exercise.records, []);
+  assert.equal(preset.exercise.completed, false);
+  assert.equal(preset.exercise.rest, 90);
+  assert.equal(preset.exercise.sets, 4);
+  assert.equal(preset.exercise.reps, 12);
+  first.targetWeights![0] = 40;
+  first.records.push({ id: "new", reps: 12, kg: 40, duration: null, at: 2000 });
+  assert.deepEqual(preset.exercise.targetWeights, [10, 15, 20, 25]);
+  assert.deepEqual(second.targetWeights, [10, 15, 20, 25]);
+  const updated = saveExercisePreset({ ...preset.exercise, sets: 2, targetWeights: [30, 35] }, "其他", preset.id);
+  assert.equal(updated.id, preset.id);
+  assert.equal(updated.category, "其他");
+  assert.equal(first.sets, 4);
+  assert.equal(second.records.length, 0);
+  assert.equal(exercise.records[0].kg, 22.5);
+});
+
+test("旧备份兼容，动作库和每组重量在完整备份中往返保留", () => {
+  const data = initialData(), date = "2026-11-01";
+  delete data.exerciseLibrary;
+  data.days[date] = samplePlan(120);
+  assert.ok(validateData(JSON.parse(JSON.stringify(data))));
+  const exercise = data.days[date].exercises[0];
+  exercise.targetWeights = [20, 22.5, 25, 27.5];
+  data.exerciseLibrary = [saveExercisePreset(exercise, "胸")];
+  data.templates = [{ id: "template", name: "递增组", day: clonePlan(data.days[date]) }];
+  const restored = JSON.parse(JSON.stringify(data));
+  assert.ok(validateData(restored));
+  assert.deepEqual(restored, data);
+  assert.equal(weightForSet(restored.exerciseLibrary![0].exercise, 2), 25);
+});
+
+test("导入拒绝组数不匹配和非法重量，并校验模板与动作库分类及空历史", () => {
+  const data = initialData(), date = "2026-11-01";
+  const plan = samplePlan(120), exercise = plan.exercises[0];
+  for (const targetWeights of [null, [], [20, 30], [20, 30, 40, 50, 60], [20, -1, 30, 40], [20, 30, 40, 1001], [20, 30, NaN, 40], [20, "30", 40, 50], new Array(4)]) {
+    const invalidPlan = { ...plan, exercises: [{ ...exercise, targetWeights }] };
+    assert.equal(validateData({ ...data, days: { [date]: invalidPlan } }), false);
+    assert.equal(validateData({ ...data, templates: [{ id: "bad", name: "坏模板", day: invalidPlan }] }), false);
+    assert.equal(validateData({ ...data, exerciseLibrary: [{ id: "bad", category: "胸", exercise: invalidPlan.exercises[0] }] }), false);
+  }
+  const preset = saveExercisePreset(exercise, "胸");
+  for (const exerciseLibrary of [null, {}, [null], [preset, preset], [{ ...preset, category: "未知" }], [{ ...preset, exercise: { ...preset.exercise, completed: true } }], [{ ...preset, exercise: { ...preset.exercise, records: [{ id: "past", reps: 12, kg: 20, duration: 30, at: 1000 }] } }]]) {
+    assert.equal(validateData({ ...data, exerciseLibrary }), false);
+  }
+});
 
 test("动作上下移动保留计时、历史与其他日期，模板采用新顺序", () => {
   const data = initialData(), date = "2026-10-04";
@@ -162,6 +245,8 @@ test("零秒休息直接等待，刷新恢复不会自动开始下一组", () =>
 });
 test("复制模板仅复制目标，完成组清空且不修改原记录", () => {
   const original = samplePlan(120);
+  original.note = "今天最后一组很吃力";
+  original.exercises[0].targetWeights = [10, 20, 30, 40];
   original.exercises[0].records.push({
     id: "r",
     reps: 8,
@@ -170,6 +255,11 @@ test("复制模板仅复制目标，完成组清空且不修改原记录", () =>
     at: 123,
   });
   const cloned = clonePlan(original);
+  assert.equal(cloned.note, "");
+  assert.equal(original.note, "今天最后一组很吃力");
+  assert.deepEqual(cloned.exercises[0].targetWeights, [10, 20, 30, 40]);
+  cloned.exercises[0].targetWeights![0] = 5;
+  assert.equal(original.exercises[0].targetWeights[0], 10);
   assert.equal(completedSets(cloned), 0);
   assert.equal(completedSets(original), 1);
   assert.notEqual(cloned.exercises[0].id, original.exercises[0].id);

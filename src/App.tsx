@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReminderSettings from "./ReminderSettings";
 import AndroidReminderSettings from "./AndroidReminderSettings";
 import { SortableExercises, SortableExerciseCard } from "./SortableExercises";
+import ExerciseForm from "./ExerciseForm";
+import ExerciseLibrary from "./ExerciseLibrary";
 import {
   isAndroid,
   syncNativeReminder,
@@ -15,6 +17,7 @@ import {
 } from "./reminders";
 import {
   Activity,
+  BookmarkPlus,
   ArrowDownToLine,
   ArrowUpFromLine,
   CalendarDays,
@@ -39,6 +42,9 @@ import {
 } from "lucide-react";
 import {
   clonePlan,
+  cloneExercisePlan,
+  saveExercisePreset,
+  weightForSet,
   completedSets,
   advanceExercise,
   dateKey,
@@ -57,6 +63,8 @@ import {
   type Data,
   type Day,
   type Exercise,
+  type SavedExercise,
+  type ExerciseCategory,
   type SetRecord,
 } from "./model";
 
@@ -76,6 +84,8 @@ function readData() {
 }
 type ModalState =
   | { kind: "exercise"; exercise: Exercise }
+  | { kind: "library" }
+  | { kind: "preset"; exercise: Exercise; saved?: SavedExercise }
   | { kind: "weight" }
   | { kind: "tags" }
   | { kind: "templates" }
@@ -363,7 +373,7 @@ export default function App() {
                 {
                   id: uid(),
                   reps: x.reps,
-                  kg: x.kg,
+                  kg: weightForSet(x),
                   duration: null,
                   at: Date.now(),
                 },
@@ -491,7 +501,7 @@ export default function App() {
       return;
     }
     const action = () => {
-      patchDay(() => clonePlan(plan));
+      patchDay((current) => ({ ...clonePlan(plan), note: current.note }));
       setModal(null);
       notify("计划已载入");
     };
@@ -889,10 +899,13 @@ export default function App() {
                                 <b>
                                   {e.sets} × {e.reps}
                                 </b>
-                                {e.kg > 0 && ` · ${e.kg} kg`}
+                                {e.targetWeights ? " · 分组重量" : e.kg > 0 && ` · ${e.kg} kg`}
                               </span>
                               <span>预计 {formatTime(e.seconds)} / 组</span>
                             </div>
+                            {e.targetWeights && <div className="set-targets" aria-label={`${e.name}每组目标重量`}>
+                              {e.targetWeights.map((kg, i) => <span key={i}>第 {i + 1} 组 <b>{kg} kg</b></span>)}
+                            </div>}
                             <div className="exercise-actions">
                               <div className="set-dots">
                                 {Array.from(
@@ -956,6 +969,9 @@ export default function App() {
                                   e.records.length >= e.sets ? "查看完成选项" : e.records.length ? "开始下一组" : "开始本组"}
                               </button>
                             </div>
+                            <button className="save-exercise-button" onClick={() => setModal({ kind: "preset", exercise: e })}>
+                              <BookmarkPlus size={14} /> 存入动作库
+                            </button>
                             {e.records.length > 0 && (
                               <details>
                                 <summary>
@@ -1021,9 +1037,7 @@ export default function App() {
                   )}
                   <button
                     className="add-exercise"
-                    onClick={() =>
-                      editExercise(newExercise("新动作", data.settings.rest))
-                    }
+                    onClick={() => setModal({ kind: "library" })}
                   >
                     <Plus size={17} /> 添加训练动作
                   </button>
@@ -1281,7 +1295,7 @@ export default function App() {
                   onChange={(e) => void importFile(e.target.files?.[0])}
                 />
                 <p className="subtle">
-                  备份包含训练计划、逐组记录、体重、标签和模板。
+                  备份包含训练计划、逐组记录、体重、标签、模板和动作库。
                 </p>
               </section>
             </div>
@@ -1318,6 +1332,9 @@ export default function App() {
             <span>
               {timer.kind === "exercise" ? "接下来：" : ""}{activeExercise.name} · 已完成 {activeExercise.records.length} 组
             </span>
+            {(timer.phase === "work" || activeExercise.records.length < activeExercise.sets) && <span className="timer-set-target">
+              第 {activeExercise.records.length + 1} 组目标 · {activeExercise.reps} 次 × {weightForSet(activeExercise)} kg
+            </span>}
             {isAndroid && nativeAlarmStatus && (
               <span className="native-alarm-status">{nativeAlarmStatus}</span>
             )}
@@ -1404,7 +1421,9 @@ export default function App() {
       {modal && (
         <Modal
           title={
-            modal.kind === "exercise"
+            modal.kind === "library" ? "我的动作库"
+              : modal.kind === "preset" ? (modal.saved ? "编辑已保存动作" : "存入动作库")
+              : modal.kind === "exercise"
               ? "编辑训练动作"
               : modal.kind === "weight"
                 ? "记录体重"
@@ -1423,19 +1442,54 @@ export default function App() {
           {modal.kind === "exercise" && (
             <ExerciseForm
               exercise={modal.exercise}
-              onSave={(e) => {
-                patchDay((d) => ({
-                  ...d,
-                  exercises: d.exercises.some((x) => x.id === e.id)
-                    ? d.exercises.map((x) => x.id === e.id
+              onSave={(e, category) => {
+                const saved = category ? saveExercisePreset(e, category) : undefined;
+                setData((d) => {
+                  const current = d.days[selected] ?? emptyDay();
+                  const exercises = current.exercises.some((x) => x.id === e.id)
+                    ? current.exercises.map((x) => x.id === e.id
                       ? { ...e, completed: e.completed && e.records.length >= e.sets }
                       : x)
-                    : [...d.exercises, e],
-                }));
+                    : [...current.exercises, e];
+                  return {
+                    ...d,
+                    exerciseLibrary: saved ? [...(d.exerciseLibrary ?? []), saved] : d.exerciseLibrary,
+                    days: { ...d.days, [selected]: { ...current, exercises } },
+                  };
+                });
                 setModal(null);
+                if (category) notify("动作已保存，并加入动作库");
               }}
             />
           )}
+          {modal.kind === "library" && <ExerciseLibrary
+            items={data.exerciseLibrary ?? []}
+            onCreate={() => editExercise(newExercise("新动作", data.settings.rest))}
+            onAdd={(saved) => {
+              patchDay((current) => ({ ...current, exercises: [...current.exercises, cloneExercisePlan(saved.exercise)] }));
+              setModal(null);
+              notify("已添加到当天计划");
+            }}
+            onEdit={(saved) => setModal({ kind: "preset", exercise: saved.exercise, saved })}
+            onDelete={(saved) => setModal({ kind: "confirm", title: "删除已保存动作？",
+              text: `删除动作库中的「${saved.exercise.name}」，已安排的训练和历史记录不受影响。`,
+              action: () => setData((d) => ({ ...d, exerciseLibrary: (d.exerciseLibrary ?? []).filter((x) => x.id !== saved.id) })),
+            })}
+          />}
+          {modal.kind === "preset" && <ExerciseForm
+            key={modal.saved?.id ?? modal.exercise.id}
+            exercise={modal.exercise}
+            libraryMode
+            initialCategory={modal.saved?.category ?? ({ chest: "胸", shoulder: "肩", back: "背", leg: "腿" } as Record<string, ExerciseCategory>)[day.tags[0]] ?? "其他"}
+            onSave={(exercise, category) => {
+              const saved = saveExercisePreset(exercise, category ?? "其他", modal.saved?.id);
+              setData((d) => ({ ...d, exerciseLibrary: modal.saved
+                ? (d.exerciseLibrary ?? []).map((x) => x.id === saved.id ? saved : x)
+                : [...(d.exerciseLibrary ?? []), saved] }));
+              setModal({ kind: "library" });
+              notify("动作库已保存");
+            }}
+          />}
           {modal.kind === "weight" && (
             <WeightForm
               selected={selected}
@@ -1603,7 +1657,7 @@ export default function App() {
                   placeholder="例如：周一胸部训练"
                 />
               </label>
-              <p className="subtle">保留动作、目标和标签，不包含已完成记录。</p>
+              <p className="subtle">保留动作、各组目标和标签，不包含已完成记录与训练随记。</p>
               <button className="primary wide">保存模板</button>
             </form>
           )}
@@ -1653,7 +1707,8 @@ export default function App() {
                     type="number"
                     min="0"
                     max="1000"
-                    step="0.5"
+                    step="0.01"
+                    inputMode="decimal"
                     required
                     defaultValue={modal.record.kg}
                   />
@@ -1799,69 +1854,6 @@ function Modal({
       </div>
       {children}
     </dialog>
-  );
-}
-function ExerciseForm({
-  exercise,
-  onSave,
-}: {
-  exercise: Exercise;
-  onSave: (e: Exercise) => void;
-}) {
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const f = new FormData(e.currentTarget),
-          name = String(f.get("name")).trim();
-        if (!name) return;
-        onSave({
-          ...exercise,
-          name,
-          sets: Number(f.get("sets")),
-          reps: Number(f.get("reps")),
-          kg: Number(f.get("kg")),
-          seconds: Number(f.get("seconds")),
-          rest: Number(f.get("rest")),
-        });
-      }}
-    >
-      <label>
-        动作名称
-        <input
-          required
-          name="name"
-          maxLength={60}
-          defaultValue={exercise.name}
-        />
-      </label>
-      <div className="form-grid">
-        {[
-          ["sets", "目标组数", exercise.sets, 1, 100, 1],
-          ["reps", "每组次数", exercise.reps, 1, 999, 1],
-          ["kg", "目标重量（kg）", exercise.kg, 0, 1000, 0.5],
-          ["seconds", "预计单组（秒）", exercise.seconds, 1, 3600, 1],
-          ["rest", "组间休息（秒）", exercise.rest, 0, 3600, 1],
-        ].map(([name, label, value, min, max, step]) => (
-          <label key={String(name)}>
-            {label}
-            <input
-              required
-              name={String(name)}
-              type="number"
-              min={min}
-              max={max}
-              step={step}
-              defaultValue={value}
-            />
-          </label>
-        ))}
-      </div>
-      <p className="subtle">
-        0 kg 代表徒手；0 秒休息将直接进入等待。调整目标不会修改已完成的组。
-      </p>
-      <button className="primary wide">保存动作</button>
-    </form>
   );
 }
 function WeightChart({ points }: { points: [string, number][] }) {

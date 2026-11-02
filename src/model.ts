@@ -11,10 +11,18 @@ export type Exercise = {
   sets: number;
   reps: number;
   kg: number;
+  targetWeights?: number[];
   seconds: number;
   rest: number;
   records: SetRecord[];
   completed?: boolean;
+};
+export const exerciseCategories = ["胸", "肩", "背", "腿", "其他"] as const;
+export type ExerciseCategory = (typeof exerciseCategories)[number];
+export type SavedExercise = {
+  id: string;
+  category: ExerciseCategory;
+  exercise: Exercise;
 };
 export type Day = { tags: string[]; exercises: Exercise[]; note: string };
 export type Timer = {
@@ -31,6 +39,7 @@ export type Data = {
   weights: Record<string, number>;
   tags: { id: string; name: string; color: string }[];
   templates: { id: string; name: string; day: Day }[];
+  exerciseLibrary?: SavedExercise[];
   settings: {
     rest: number;
     exerciseRest?: number;
@@ -68,6 +77,7 @@ export const initialData = (): Data => ({
     { id: "rest", name: "休息", color: "#e8e9ed" },
   ],
   templates: [],
+  exerciseLibrary: [],
   settings: { rest: 120, exerciseRest: 120, sound: true, notifications: false, vibration: true },
   timer: null,
 });
@@ -140,13 +150,35 @@ export function samplePlan(rest: number): Day {
 }
 export const completedSets = (day?: Day) =>
   day?.exercises.reduce((n, e) => n + e.records.length, 0) ?? 0;
+/** Extra sets retain the last planned weight; older plans use their uniform weight. */
+export function weightForSet(exercise: Exercise, index = exercise.records.length): number {
+  const weights = exercise.targetWeights;
+  return weights?.[Math.min(Math.max(0, index), weights.length - 1)] ?? exercise.kg;
+}
+export function cloneExercisePlan(exercise: Exercise): Exercise {
+  return {
+    id: uid(),
+    name: exercise.name,
+    sets: exercise.sets,
+    reps: exercise.reps,
+    kg: exercise.kg,
+    ...(exercise.targetWeights ? { targetWeights: [...exercise.targetWeights] } : {}),
+    seconds: exercise.seconds,
+    rest: exercise.rest,
+    records: [],
+    completed: false,
+  };
+}
+export function saveExercisePreset(
+  exercise: Exercise, category: ExerciseCategory, id: string = uid(),
+): SavedExercise {
+  return { id, category, exercise: cloneExercisePlan(exercise) };
+}
 export function clonePlan(day: Day): Day {
   return {
     tags: [...day.tags],
-    note: day.note,
-    exercises: day.exercises.map((e) => ({
-      ...e, id: uid(), records: [], completed: false,
-    })),
+    note: "",
+    exercises: day.exercises.map(cloneExercisePlan),
   };
 }
 export function finishSet(data: Data, now: number): Data {
@@ -158,7 +190,7 @@ export function finishSet(data: Data, now: number): Data {
   const record: SetRecord = {
     id: uid(),
     reps: exercise.reps,
-    kg: exercise.kg,
+    kg: weightForSet(exercise),
     duration: Math.max(0, Math.floor((now - t.started) / 1000)),
     at: now,
   };
@@ -201,6 +233,31 @@ export function validateData(value: unknown): value is Data {
     !isNaN(parseDate(s).getTime()) &&
     dateKey(parseDate(s)) === s;
   const str = (s: unknown) => typeof s === "string" && s.length <= 5000;
+  const exercise = (e: Exercise) =>
+    e &&
+    str(e.id) &&
+    str(e.name) &&
+    num(e.sets, 1, 100) &&
+    Number.isInteger(e.sets) &&
+    num(e.reps, 1, 999) &&
+    Number.isInteger(e.reps) &&
+    num(e.kg, 0, 1000) &&
+    (e.targetWeights === undefined ||
+      (Array.isArray(e.targetWeights) && e.targetWeights.length === e.sets &&
+        Array.from(e.targetWeights).every((kg) => num(kg, 0, 1000)))) &&
+    num(e.seconds, 1, 3600) &&
+    num(e.rest, 0, 3600) &&
+    (e.completed === undefined || typeof e.completed === "boolean") &&
+    Array.isArray(e.records) &&
+    e.records.every(
+      (r) =>
+        str(r.id) &&
+        num(r.reps, 0, 999) &&
+        Number.isInteger(r.reps) &&
+        num(r.kg, 0, 1000) &&
+        (r.duration === null || num(r.duration, 0, 31536000)) &&
+        num(r.at, 0, 8640000000000000),
+    );
   const day = (v: Day) =>
     v &&
     Array.isArray(v.tags) &&
@@ -208,29 +265,7 @@ export function validateData(value: unknown): value is Data {
     str(v.note) &&
     Array.isArray(v.exercises) &&
     new Set(v.exercises.map((e) => e.id)).size === v.exercises.length &&
-    v.exercises.every(
-      (e) =>
-        str(e.id) &&
-        str(e.name) &&
-        num(e.sets, 1, 100) &&
-        Number.isInteger(e.sets) &&
-        num(e.reps, 1, 999) &&
-        Number.isInteger(e.reps) &&
-        num(e.kg, 0, 1000) &&
-        num(e.seconds, 1, 3600) &&
-        num(e.rest, 0, 3600) &&
-        (e.completed === undefined || typeof e.completed === "boolean") &&
-        Array.isArray(e.records) &&
-        e.records.every(
-          (r) =>
-            str(r.id) &&
-            num(r.reps, 0, 999) &&
-            Number.isInteger(r.reps) &&
-            num(r.kg, 0, 1000) &&
-            (r.duration === null || num(r.duration, 0, 31536000)) &&
-            num(r.at, 0, 8640000000000000),
-        ),
-    );
+    v.exercises.every(exercise);
   try {
     return (
       d.version === 1 &&
@@ -248,6 +283,13 @@ export function validateData(value: unknown): value is Data {
       ) &&
       Array.isArray(d.templates) &&
       d.templates.every((t) => str(t.id) && str(t.name) && day(t.day)) &&
+      (d.exerciseLibrary === undefined ||
+        (Array.isArray(d.exerciseLibrary) &&
+          new Set(d.exerciseLibrary.map((item) => item.id)).size === d.exerciseLibrary.length &&
+          d.exerciseLibrary.every((item) =>
+            str(item.id) && exerciseCategories.includes(item.category) &&
+            exercise(item.exercise) && item.exercise.records.length === 0 &&
+            item.exercise.completed !== true))) &&
       num(d.settings.rest, 0, 3600) &&
       (d.settings.exerciseRest === undefined || num(d.settings.exerciseRest, 0, 3600)) &&
       typeof d.settings.sound === "boolean" &&

@@ -45,6 +45,7 @@ import {
   cloneExercisePlan,
   saveExercisePreset,
   weightForSet,
+  restForSet,
   completedSets,
   advanceExercise,
   dateKey,
@@ -903,6 +904,9 @@ export default function App() {
                               </span>
                               <span>预计 {formatTime(e.seconds)} / 组</span>
                             </div>
+                            {e.setRests && <div className="set-targets" aria-label={`${e.name}每组休息时间`}>
+                              {e.setRests.map((rest, i) => <span key={i}>第 {i + 1} 组后 <b>{formatTime(rest)}</b></span>)}
+                            </div>}
                             {e.targetWeights && <div className="set-targets" aria-label={`${e.name}每组目标重量`}>
                               {e.targetWeights.map((kg, i) => <span key={i}>第 {i + 1} 组 <b>{kg} kg</b></span>)}
                             </div>}
@@ -958,7 +962,7 @@ export default function App() {
                               <span>
                                 {e.completed ? "动作已完成 · " : ""}
                                 {e.records.length} 组完成 · 休息{" "}
-                                {formatTime(e.rest)}
+                                {e.setRests ? "逐组设置" : formatTime(e.rest)}
                               </span>
                               <button
                                 disabled={timer?.phase === "work"}
@@ -1333,7 +1337,7 @@ export default function App() {
               {timer.kind === "exercise" ? "接下来：" : ""}{activeExercise.name} · 已完成 {activeExercise.records.length} 组
             </span>
             {(timer.phase === "work" || activeExercise.records.length < activeExercise.sets) && <span className="timer-set-target">
-              第 {activeExercise.records.length + 1} 组目标 · {activeExercise.reps} 次 × {weightForSet(activeExercise)} kg
+              第 {activeExercise.records.length + 1} 组目标 · {activeExercise.reps} 次 × {weightForSet(activeExercise)} kg · 组后休息 {formatTime(restForSet(activeExercise))}
             </span>}
             {isAndroid && nativeAlarmStatus && (
               <span className="native-alarm-status">{nativeAlarmStatus}</span>

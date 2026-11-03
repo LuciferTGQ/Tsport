@@ -29,6 +29,9 @@ New-Item -ItemType Directory -Path "$projectRoot/releases" -Force | Out-Null
 $appVersion = (Get-Content -LiteralPath "$projectRoot/package.json" -Raw | ConvertFrom-Json).version
 $apkPath = "$projectRoot/releases/Tsport-$appVersion-debug.apk"
 Copy-Item -LiteralPath "$projectRoot/android/app/build/outputs/apk/debug/app-debug.apk" -Destination $apkPath -Force
-$apkHash = (Get-FileHash -LiteralPath $apkPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$apkStream = [System.IO.File]::OpenRead($apkPath)
+$apkHasher = [System.Security.Cryptography.SHA256]::Create()
+try { $apkHash = [System.BitConverter]::ToString($apkHasher.ComputeHash($apkStream)).Replace('-', '').ToLowerInvariant() }
+finally { $apkStream.Dispose(); $apkHasher.Dispose() }
 Set-Content -LiteralPath "$apkPath.sha256" -Value "$apkHash  Tsport-$appVersion-debug.apk" -Encoding ascii
 Write-Output "APK ready: $apkPath"

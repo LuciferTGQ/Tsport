@@ -293,3 +293,37 @@ test("跨年与闰日使用本地日期，不受 UTC 日期偏移影响", () => 
   d.setMonth(d.getMonth() + 1);
   assert.equal(dateKey(d), "2027-01-01");
 });
+
+
+test("逐组休息按刚完成组取值，加练沿用末组，兼容旧计划及备份", () => {
+  let d = initialData();
+  const date = "2026-11-03";
+  d.days[date] = samplePlan(120);
+  const e = d.days[date].exercises[0];
+  e.sets = 3;
+  e.setRests = [0, 150, 180];
+  assert.ok(validateData(d));
+  const cloned = clonePlan(d.days[date]);
+  assert.deepEqual(cloned.exercises[0].setRests, [0, 150, 180]);
+  cloned.exercises[0].setRests![0] = 60;
+  assert.equal(e.setRests[0], 0);
+  for (const rest of [0, 150, 180, 180]) {
+    d.timer = { phase: "work", date, exerciseId: e.id, started: 1000, deadline: 1000 };
+    d = finishSet(d, 41000);
+    assert.equal(d.timer!.deadline, 41000 + rest * 1000);
+    assert.equal(d.timer!.phase, rest ? "rest" : "ready");
+    assert.ok(validateData(JSON.parse(JSON.stringify(d))));
+    assert.equal(settleTimer(d, 999999).timer!.phase, "ready");
+  }
+  const current = d.days[date].exercises[0];
+  const history = structuredClone(current.records);
+  for (const invalid of [[120], [0, -1, 180], [0, 3601, 180], [0, 1.5, 180], [0, NaN, 180]]) {
+    current.setRests = invalid;
+    assert.equal(validateData(d), false);
+  }
+  delete current.setRests;
+  assert.ok(validateData(d));
+  d.timer = { ...d.timer!, phase: "work" };
+  assert.equal(finishSet(d, 50000).timer!.deadline, 170000);
+  assert.deepEqual(current.records, history);
+});

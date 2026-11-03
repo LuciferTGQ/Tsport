@@ -12,6 +12,7 @@ export type Exercise = {
   reps: number;
   kg: number;
   targetWeights?: number[];
+  setRests?: number[];
   seconds: number;
   rest: number;
   records: SetRecord[];
@@ -155,6 +156,11 @@ export function weightForSet(exercise: Exercise, index = exercise.records.length
   const weights = exercise.targetWeights;
   return weights?.[Math.min(Math.max(0, index), weights.length - 1)] ?? exercise.kg;
 }
+/** Rest after the indexed set; extra sets retain the final planned rest. */
+export function restForSet(exercise: Exercise, index = exercise.records.length): number {
+  const rests = exercise.setRests;
+  return rests?.[Math.min(Math.max(0, index), rests.length - 1)] ?? exercise.rest;
+}
 export function cloneExercisePlan(exercise: Exercise): Exercise {
   return {
     id: uid(),
@@ -165,6 +171,7 @@ export function cloneExercisePlan(exercise: Exercise): Exercise {
     ...(exercise.targetWeights ? { targetWeights: [...exercise.targetWeights] } : {}),
     seconds: exercise.seconds,
     rest: exercise.rest,
+    ...(exercise.setRests ? { setRests: [...exercise.setRests] } : {}),
     records: [],
     completed: false,
   };
@@ -187,6 +194,7 @@ export function finishSet(data: Data, now: number): Data {
   const day = data.days[t.date],
     exercise = day?.exercises.find((e) => e.id === t.exerciseId);
   if (!exercise) return { ...data, timer: null };
+  const rest = restForSet(exercise);
   const record: SetRecord = {
     id: uid(),
     reps: exercise.reps,
@@ -208,9 +216,9 @@ export function finishSet(data: Data, now: number): Data {
     timer: {
       ...t,
       kind: "set",
-      phase: exercise.rest > 0 ? "rest" : "ready",
+      phase: rest > 0 ? "rest" : "ready",
       started: now,
-      deadline: now + exercise.rest * 1000,
+      deadline: now + rest * 1000,
     },
   };
 }
@@ -247,6 +255,9 @@ export function validateData(value: unknown): value is Data {
         Array.from(e.targetWeights).every((kg) => num(kg, 0, 1000)))) &&
     num(e.seconds, 1, 3600) &&
     num(e.rest, 0, 3600) &&
+    (e.setRests === undefined ||
+      (Array.isArray(e.setRests) && e.setRests.length === e.sets &&
+        Array.from(e.setRests).every((rest) => num(rest, 0, 3600) && Number.isInteger(rest)))) &&
     (e.completed === undefined || typeof e.completed === "boolean") &&
     Array.isArray(e.records) &&
     e.records.every(

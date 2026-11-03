@@ -47,7 +47,7 @@ export default function ExerciseLibrary({ items, onAdd, onEdit, onDelete, onCrea
               <div className="library-item-heading">
                 <strong>{item.exercise.name}</strong><span>{item.category}</span>
               </div>
-              <p>{item.exercise.sets} 组 × {item.exercise.reps} 次 · 休息 {item.exercise.rest} 秒</p>
+              <p>{item.exercise.sets} 组 × {item.exercise.reps} 次 · 休息 {item.exercise.setRests ? item.exercise.setRests.join(" / ") : item.exercise.rest} 秒</p>
               <p className="library-weights">
                 {item.exercise.targetWeights
                   ? `逐组重量：${item.exercise.targetWeights.join(" / ")} kg`

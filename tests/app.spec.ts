@@ -715,3 +715,45 @@ test("动作库按分类搜索并独立编辑添加删除，刷新和备份恢�
   expect(restored.exerciseLibrary).toEqual(updated.exerciseLibrary);
   expect(restored.days[today]).toEqual(updated.days[today]);
 });
+
+
+test("逐组休息编辑、缩放、刷新与计时，保留正在进行的休息", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "添加训练动作", exact: true }).click();
+  await page.getByRole("button", { name: "新建动作", exact: true }).click();
+  await page.getByLabel("动作名称", { exact: true }).fill("逐组休息卧推");
+  await page.getByLabel("目标组数", { exact: true }).fill("3");
+  await page.getByLabel("每组单独设置休息", { exact: true }).check();
+  await page.getByLabel("第 2 组后休息（秒）", { exact: true }).fill("150");
+  await page.getByLabel("第 3 组后休息（秒）", { exact: true }).fill("180");
+  await page.getByLabel("目标组数", { exact: true }).fill("2");
+  await page.getByLabel("目标组数", { exact: true }).fill("4");
+  await expect(page.getByLabel("第 3 组后休息（秒）", { exact: true })).toHaveValue("180");
+  await expect(page.getByLabel("第 4 组后休息（秒）", { exact: true })).toHaveValue("120");
+  await page.getByLabel("目标组数", { exact: true }).fill("3");
+  await page.getByLabel("同时保存到动作库", { exact: true }).check();
+  expect(await page.locator("dialog").evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/mobile-set-rests.png" });
+  await page.getByRole("button", { name: "保存动作", exact: true }).click();
+  await page.reload();
+  await expect(page.getByLabel("逐组休息卧推每组休息时间")).toContainText("第 3 组后 03:00");
+  await page.locator(".exercise-card").getByRole("button", { name: "开始本组", exact: true }).click();
+  const dock = page.getByRole("region", { name: "训练计时器" });
+  await dock.getByRole("button", { name: "结束本组", exact: true }).click();
+  const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem("tsport-v1")!));
+  const first = await stored();
+  expect(first.timer.deadline - first.timer.started).toBe(120000);
+  expect(first.exerciseLibrary[0].exercise.setRests).toEqual([120, 150, 180]);
+  await page.locator(".exercise-name").click();
+  await page.getByLabel("第 1 组后休息（秒）", { exact: true }).fill("60");
+  await page.getByRole("button", { name: "保存动作", exact: true }).click();
+  expect((await stored()).timer.deadline).toBe(first.timer.deadline);
+  expect((await stored()).days[dateKey()].exercises[0].records).toEqual(first.days[dateKey()].exercises[0].records);
+  await dock.getByRole("button", { name: "跳过休息", exact: true }).click();
+  await dock.getByRole("button", { name: "开始下一组", exact: true }).click();
+  await dock.getByRole("button", { name: "结束本组", exact: true }).click();
+  const second = await stored();
+  expect(second.timer.deadline - second.timer.started).toBe(150000);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRestAlarmScheduler, type AlarmPort } from "../src/restAlarm.ts";
-import { initialData, samplePlan, type Data } from "../src/model.ts";
+import { initialData, samplePlan, finishSet, type Data } from "../src/model.ts";
 
 function rest(): Data {
   const d = initialData();
@@ -97,4 +97,17 @@ test("动作切换即使截止时间相同，也安排下一动作的新目标",
   const nextId = d.days[d.timer!.date].exercises[1].id;
   await sync({ ...d, timer: { ...d.timer!, kind: "exercise", exerciseId: nextId } });
   assert.deepEqual(targets, [d.timer!.exerciseId, nextId]);
+});
+
+
+test("每组自定义休息截止时间交给原生调度，零秒取消旧提醒", async () => {
+  const { sync, events } = fixture();
+  let d = rest();
+  d.days["2026-09-26"].exercises[0].setRests = [150, 180, 0, 240];
+  for (let i = 0; i < 3; i++) {
+    d.timer = { ...d.timer!, phase: "work", started: 1000 };
+    d = finishSet(d, 11000);
+    await sync(d);
+  }
+  assert.deepEqual(events, ["schedule:161000", "schedule:191000", "cancel"]);
 });

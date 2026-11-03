@@ -15,6 +15,9 @@ export default function ExerciseForm({
 }) {
   const [sets, setSets] = useState(String(exercise.sets));
   const [kg, setKg] = useState(String(exercise.kg));
+  const [rest, setRest] = useState(String(exercise.rest));
+  const [perSetRest, setPerSetRest] = useState(!!exercise.setRests);
+  const [rests, setRests] = useState<string[]>(exercise.setRests?.map(String) ?? []);
   const [perSet, setPerSet] = useState(!!exercise.targetWeights);
   // Keep hidden rows while changing the set count, so shrinking then expanding
   // the form does not discard weights the user has already entered.
@@ -38,7 +41,10 @@ export default function ExerciseForm({
           reps: Number(form.get("reps")),
           kg: Number(kg),
           seconds: Number(form.get("seconds")),
-          rest: Number(form.get("rest")),
+          rest: Number(rest),
+          setRests: perSetRest
+            ? Array.from({ length: count }, (_, index) => Number(rests[index] ?? rest))
+            : undefined,
           targetWeights: perSet
             ? Array.from({ length: count }, (_, index) => Number(weights[index] ?? kg))
             : undefined,
@@ -56,6 +62,11 @@ export default function ExerciseForm({
             inputMode="numeric" value={sets} onChange={(event) => {
               const value = event.target.value;
               setSets(value);
+              if (perSetRest) {
+                const nextCount = Math.max(0, Math.min(100, Math.floor(Number(value) || 0)));
+                setRests((current) => Array.from({ length: Math.max(nextCount, current.length) },
+                  (_, index) => current[index] ?? rest));
+              }
               if (perSet) {
                 const nextCount = Math.max(0, Math.min(100, Math.floor(Number(value) || 0)));
                 setWeights((current) => Array.from({ length: Math.max(nextCount, current.length) },
@@ -81,7 +92,7 @@ export default function ExerciseForm({
         <label>
           组间休息（秒）
           <input required name="rest" type="number" min="0" max="3600" step="1"
-            inputMode="numeric" defaultValue={exercise.rest} />
+            inputMode="numeric" value={rest} onChange={(event) => setRest(event.target.value)} />
         </label>
       </div>
       <label className="exercise-option">
@@ -123,6 +134,47 @@ export default function ExerciseForm({
             ))}
           </div>
           <p className="subtle">可设置递增或递减组；加练时沿用最后一组重量。</p>
+        </section>
+      )}
+      <label className="exercise-option">
+        <input type="checkbox" checked={perSetRest} onChange={(event) => {
+          const enabled = event.target.checked;
+          if (enabled) setRests((current) => Array.from({ length: Math.max(count, current.length) },
+            (_, index) => current[index] ?? rest));
+          setPerSetRest(enabled);
+        }} />
+        每组单独设置休息
+      </label>
+      {perSetRest && (
+        <section className="set-weight-editor" aria-label="逐组休息时间">
+          <div className="set-weight-heading">
+            <span>每组结束后休息 · 秒</span>
+            <button type="button" className="text-button"
+              disabled={rest === "" || !Number.isInteger(Number(rest)) || Number(rest) < 0 || Number(rest) > 3600}
+              onClick={() => setRests((current) => Array.from({ length: Math.max(count, current.length) }, () => rest))}>
+              休息应用到全部组
+            </button>
+          </div>
+          <p className="set-weight-help">上方组间休息用于新增组；后面的组可以设置更长休息。</p>
+          <div className="set-weight-grid">
+            {Array.from({ length: count }, (_, index) => (
+              <label key={index}>
+                第 {index + 1} 组后
+                <input required type="number" min="0" max="3600" step="1" inputMode="numeric"
+                  aria-label={`第 ${index + 1} 组后休息（秒）`}
+                  value={rests[index] ?? rest}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setRests((current) => {
+                      const next = [...current];
+                      next[index] = value;
+                      return next;
+                    });
+                  }} />
+              </label>
+            ))}
+          </div>
+          <p className="subtle">0 秒直接进入等待；加练沿用最后一组休息。修改不改变正在进行的休息，完成动作后使用偏好设置中的动作间休息。</p>
         </section>
       )}
       {!libraryMode && <label className="exercise-option">
